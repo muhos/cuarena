@@ -12,7 +12,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: nvidia/cuda:12.6.0-devel-ubuntu22.04
+    container: nvidia/cuda:12.6.0-devel-ubuntu24.04
     steps:
       - uses: actions/checkout@v4
       - name: Install CMake

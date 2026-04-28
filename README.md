@@ -75,7 +75,7 @@ int main() {
     cuarena::Logger::set_level(1);
 
     // Create pools: 1 GB pinned CPU, 4 GB GPU
-    cuarena::DeviceAllocator alloc(1 * cuarena::GB, 4 * cuarena::GB);
+    cuarena::DeviceArena alloc(1 * cuarena::GB, 4 * cuarena::GB);
 
     // GPU allocation
     float* d_buf = alloc.allocate<float>(1 << 20);

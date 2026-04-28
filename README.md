@@ -206,7 +206,7 @@ cuarena is **$10.65{\times}$ faster** than `cudaMalloc` and **$2.70{\times}$ fas
 
 cuarena is **$10{\times}$ faster** than `cudaMalloc` and **$3.51{\times}$ faster** than `cudaMallocAsync`.
 
-**Benchmark 4: resize chain (1 MB → 8 MB in 8 doublings)**
+**Benchmark 4: resize chain (1 MB to 8 MB in 8 doublings)**
 
 | allocator | mean | median | min | max |
 |---|---|---|---|---|

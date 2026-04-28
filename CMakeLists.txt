@@ -50,8 +50,6 @@ if(CUARENA_BUILD_EXAMPLES)
     target_compile_options(cuarena_benchmark PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
     )
-    set_source_files_properties(usage.cu PROPERTIES COMPILE_FLAGS "-std=c++20")
-    set_source_files_properties(benchmark.cu PROPERTIES COMPILE_FLAGS "-std=c++20")
 endif()
 
 include(GNUInstallDirs)

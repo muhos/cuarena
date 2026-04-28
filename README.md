@@ -5,11 +5,15 @@
 
 Pool-based CUDA memory allocator with $O(log\,n)$ best-fit allocation, address-ordered coalescing free lists, and zero driver overhead. I built cuarena for my own CUDA projects. All my allocators will be migrating to it as their memory backend. If it fits your use case, you're welcome to use it too.
 
+---
+
 ## Overview
 
 cuarena pre-allocates a contiguous block of GPU device memory and a block of pinned CPU memory at startup, then services all subsequent allocations entirely in host-side C++ &ndash; no `cudaMalloc` call is made per allocation. Freed blocks are returned to a free list and immediately coalesced with adjacent free neighbors, eliminating fragmentation over time without moving data around.
 
 The design is suited for CUDA applications that perform many repeated allocations of varying sizes in performance-critical paths, where the overhead of `cudaMalloc` and `cudaFree` becomes measurable. AI frameworks like PyTorch and TensorFlow ship their own pool allocators for this reason but those allocators are inseparable from their runtimes. cuarena does similar approach but as a lightweight, embeddable library for any CUDA application.
+
+---
 
 ## Designed for Performance
 
@@ -21,6 +25,8 @@ The design is suited for CUDA applications that perform many repeated allocation
 - **Stream-aware pool creation**, GPU pool creation and resize accept a GPU stream for concurrency
 - **Typed-template API** , \{`allocate<T>`, `deallocate<T>`, `resize<T>`\} with automatic size and alignment that matches GPU L1 cache line
 
+---
+
 ## Requirements
 
 | Dependency | Minimum version |
@@ -29,6 +35,8 @@ The design is suited for CUDA applications that perform many repeated allocation
 | C++ standard | C++20 |
 | CMake | 3.18 |
 | GCC | 13 (for `std::format` in examples) |
+
+---
 
 ## Build
 
@@ -61,6 +69,8 @@ Example:
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DCUARENA_SYNC_ALLOC=ON
 ```
 
+---
+
 ## Integration
 
 After building, the build/ directory contains the static library (`libcuarena.a`) and the headers are under `include/cuarena/`. Point your build system at both and link against `libcuarena.a` and the CUDA runtime.
@@ -68,6 +78,8 @@ Alternatively, run `cmake --install` to place the headers and library into a sys
 ```bash
 cmake --install build --prefix /usr/local
 ```
+
+---
 
 ## Quick start
 
@@ -97,6 +109,7 @@ int main() {
     alloc.reset_gpu_pool();
 }
 ```
+---
 
 ## Interface (API)
 
@@ -171,6 +184,7 @@ catch (const cuarena::gpu_memory_error& e) { ... }
 catch (const cuarena::cpu_memory_error& e) { ... }
 catch (const cuarena::cuda_error& e)       { ... }
 ```
+---
 
 ## Benchmark results
 

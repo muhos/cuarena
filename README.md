@@ -1,3 +1,6 @@
+![GitHub License](https://img.shields.io/github/license/muhos/cuarena)
+[![Build Status](https://github.com/muhos/cuarena/actions/workflows/test-build.yml/badge.svg)](https://github.com/muhos/cuarena/actions/workflows/test-build.yml)
+
 # cuarena
 
 Pool-based CUDA memory allocator with $O(log\,n)$ best-fit allocation, address-ordered coalescing free lists, and zero driver overhead. I built cuarena for my own CUDA projects. All my allocators will be migrating to it as their memory backend. If it fits your use case, you're welcome to use it too.

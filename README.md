@@ -46,7 +46,7 @@ Run the benchmark:
 ./build/cuarena_benchmark
 ```
 
-### Build options
+### more options
 
 | Option | Default | Description |
 |---|---|---|
@@ -95,7 +95,7 @@ int main() {
 }
 ```
 
-## API
+## Interface (API)
 
 ### Pool lifecycle
 

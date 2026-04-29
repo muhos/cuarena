@@ -44,7 +44,8 @@ namespace cuarena {
         }
         _gpool.cap = _gpool.size;
         _gpool.off = 0;
-        _gtype = type;
+        _gtype   = type;
+        _gstream = stream;
         if (type == GPUMemoryType::Managed) {
             if (stream) Logger::warn("GPU pool: stream argument ignored for Managed memory");
             if (cudaMallocManaged(reinterpret_cast<void**>(&_gpool.mem), _gpool.size) != cudaSuccess) {
@@ -119,9 +120,10 @@ namespace cuarena {
             _gpu_alloc_list.clear();
             _gpu_allocated = 0;
         }
-        if (cudaFree(_gpool.mem) != cudaSuccess) return false;
+        CUARENA_CHECK(CUARENA_FREE(_gpool.mem, _gstream));
+        CUARENA_CHECK(cudaStreamSynchronize(_gstream));
         _gpool = Pool{};
-        Logger::info("GPU %s pool destroyed", 
+        Logger::info("GPU %s pool destroyed",
             _gtype == GPUMemoryType::Device ? "device" : "managed");
         return true;
     }
@@ -162,12 +164,14 @@ namespace cuarena {
             _gpu_free_by_size.clear();
             _gpu_alloc_list.clear();
             _gpu_allocated = 0;
-            cudaFree(_gpool.mem);
+            CUARENA_FREE(_gpool.mem, _gstream);
+            cudaStreamSynchronize(_gstream);
             _gpool = Pool{};
         }
         const size_t aligned = align_up(new_size);
         _gpool.size = _gpool.cap = aligned;
-        _glimit = aligned;
+        _glimit  = aligned;
+        _gstream = stream;
         if (_gtype == GPUMemoryType::Managed) {
             if (stream) Logger::warn("Resizing GPU pool: stream argument ignored for Managed memory");
             if (cudaMallocManaged(reinterpret_cast<void**>(&_gpool.mem), _gpool.size) != cudaSuccess) {
@@ -183,7 +187,6 @@ namespace cuarena {
             }
             CUARENA_CHECK(cudaMemsetAsync(_gpool.mem, 0, _gpool.size, stream));
         }
-        CUARENA_CHECK(cudaMemsetAsync(_gpool.mem, 0, _gpool.size, stream));
         Logger::info("GPU %s pool resized to %zu MB", 
             _gtype == GPUMemoryType::Device ? "device" : "managed",
             _gpool.size / MB);

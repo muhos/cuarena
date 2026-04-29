@@ -41,6 +41,7 @@ namespace cuarena {
         size_t _gtot = 0, _gfree_mem = 0, _glimit = 0;
         size_t _ctot = 0, _cfree_mem = 0, _climit = 0;
         size_t _gpu_allocated = 0, _cpu_allocated = 0;
+        cudaStream_t  _gstream = 0;
         GPUMemoryType _gtype = GPUMemoryType::Device;
         CPUMemoryType _ctype = CPUMemoryType::Pinned;
 

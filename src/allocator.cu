@@ -36,11 +36,15 @@ namespace cuarena {
         else {
             _gpool.size = _gfree_mem;
         }
+        if (!_gpool.size) {
+            Logger::error("GPU pool: no free GPU memory available");
+            return false;
+        }
         _gpool.cap = _gpool.size;
         _gpool.off = 0;
         _gtype = type;
         if (type == GPUMemoryType::Managed) {
-            if (stream) Logger::warn("create_gpu_pool: stream argument ignored for Managed memory");
+            if (stream) Logger::warn("GPU pool: stream argument ignored for Managed memory");
             if (cudaMallocManaged(reinterpret_cast<void**>(&_gpool.mem), _gpool.size) != cudaSuccess) {
                 _gpool = Pool{};
                 return false;
@@ -77,6 +81,10 @@ namespace cuarena {
         }
         else {
             _cpool.size = _cfree_mem;
+        }
+        if (!_gpool.size) {
+            Logger::error("CPU pool: no free CPU memory available");
+            return false;
         }
         _cpool.cap = _cpool.size;
         _cpool.off = 0;

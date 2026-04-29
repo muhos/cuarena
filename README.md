@@ -62,6 +62,7 @@ Run the benchmark:
 | Option | Default | Description |
 |---|---|---|
 | `CUARENA_BUILD_EXAMPLES` | `ON` | Build `cuarena_basic` and `cuarena_benchmark` |
+| `CUARENA_BUILD_TESTS` | `ON` | Build `cuarena_test`|
 | `CUARENA_SYNC_ALLOC` | `OFF` | Use `cudaMalloc` instead of `cudaMallocAsync` |
 
 Example:

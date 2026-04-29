@@ -19,12 +19,12 @@ struct Stats {
 };
 
 struct Config {
-    static const size_t ITERS  = 500;
-    static const size_t WARMUP = 50;
-    static const size_t SIZE_SMALL  = 256;
-    static const size_t SIZE_MEDIUM = 256 * cuarena::KB;
-    static const size_t SIZE_LARGE  = 2   * cuarena::MB;
-    static const size_t BATCH_SIZE = 512;
+    static constexpr size_t ITERS  = 500;
+    static constexpr size_t WARMUP = 50;
+    static constexpr size_t SIZE_SMALL  = 256;
+    static constexpr size_t SIZE_MEDIUM = 256 * cuarena::KB;
+    static constexpr size_t SIZE_LARGE  = 2   * cuarena::MB;
+    static constexpr size_t BATCH_SIZE = 512;
 };
 
 inline double elapsed(const Clock::time_point& start) {
@@ -105,6 +105,7 @@ int main() {
         CUARENA_CHECK(cudaDeviceSynchronize());
         std::cout << std::format("\n  cuarena benchmark (device)  —  {} iterations, {} warmup\n", Config::ITERS, Config::WARMUP);
         run_benchmark(alloc, stream);
+        alloc.destroy_gpu_pool();
         CUARENA_CHECK(cudaStreamDestroy(stream));
     }
     std::cout << std::endl;

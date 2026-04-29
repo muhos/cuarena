@@ -26,19 +26,21 @@ namespace cuarena {
         cudaMemGetInfo(&_gfree_mem, &_gtot);
         if (_gfree_mem > GPU_PENALTY) _gfree_mem -= GPU_PENALTY;
         _glimit = limit ? align_up(limit) : 0;
-        if (_glimit && _glimit > _gfree_mem) {
-            Logger::warn("GPU pool: requested %zu MB, only %zu MB free - capping", _glimit / MB, _gfree_mem / MB);
-            _gpool.size = _gfree_mem;
-        }
-        else if (_glimit) {
-            _gpool.size = _glimit;
+        if (_glimit) {
+            if (_gfree_mem && _glimit > _gfree_mem) {
+                Logger::warn("GPU pool: requested %zu MB, only %zu MB free - capping", _glimit / MB, _gfree_mem / MB);
+                _gpool.size = _gfree_mem;
+            }
+            else {
+                _gpool.size = _glimit;
+            }
         }
         else {
+            if (!_gfree_mem) {
+                Logger::error("GPU pool: no free GPU memory available");
+                return false;
+            }
             _gpool.size = _gfree_mem;
-        }
-        if (!_gpool.size) {
-            Logger::error("GPU pool: no free GPU memory available");
-            return false;
         }
         _gpool.cap = _gpool.size;
         _gpool.off = 0;
@@ -50,14 +52,15 @@ namespace cuarena {
                 return false;
             }
             CUARENA_CHECK(cudaMemset(_gpool.mem, 0, _gpool.size));
-        } else {
+        }
+        else {
             if (CUARENA_MALLOC(reinterpret_cast<void**>(&_gpool.mem), _gpool.size, stream) != cudaSuccess) {
                 _gpool = Pool{};
                 return false;
             }
             CUARENA_CHECK(cudaMemsetAsync(_gpool.mem, 0, _gpool.size, stream));
         }
-        Logger::info("GPU %s pool created: %zu MB", 
+        Logger::info("GPU %s pool created: %zu MB",
             _gtype == GPUMemoryType::Device ? "device" : "managed",
             _gpool.size / MB);
         return true;
@@ -69,22 +72,20 @@ namespace cuarena {
             return true;
         }
         sys_mem_info(_cfree_mem, _ctot);
-        if (!_cfree_mem) _cfree_mem = 4ULL * GB;
         if (_cfree_mem > CPU_PENALTY) _cfree_mem -= CPU_PENALTY;
         _climit = limit ? align_up(limit) : 0;
-        if (_climit && _climit > _cfree_mem) {
-            Logger::warn("CPU pool: requested %zu MB, only %zu MB free — capping", _climit / MB, _cfree_mem / MB);
-            _cpool.size = _cfree_mem;
-        }
-        else if (_climit) {
-            _cpool.size = _climit;
+        if (_climit) {
+            if (_cfree_mem && _climit > _cfree_mem) {
+                Logger::warn("CPU pool: requested %zu MB, only %zu MB free — capping", _climit / MB, _cfree_mem / MB);
+                _cpool.size = _cfree_mem;
+            }
+            else {
+                _cpool.size = _climit;
+            }
         }
         else {
+            if (!_cfree_mem) _cfree_mem = 4ULL * GB;
             _cpool.size = _cfree_mem;
-        }
-        if (!_gpool.size) {
-            Logger::error("CPU pool: no free CPU memory available");
-            return false;
         }
         _cpool.cap = _cpool.size;
         _cpool.off = 0;
@@ -96,7 +97,8 @@ namespace cuarena {
                 return false;
             }
             std::memset(_cpool.mem, 0, _cpool.size);
-        } else {
+        }
+        else {
             if (cudaMallocHost(&_cpool.mem, _cpool.size) != cudaSuccess) {
                 _cpool = Pool{};
                 return false;
@@ -135,23 +137,24 @@ namespace cuarena {
         }
         if (_ctype == CPUMemoryType::Pageable) {
             std::free(_cpool.mem);
-        } else {
+        }
+        else {
             if (cudaFreeHost(_cpool.mem) != cudaSuccess) return false;
         }
         _cpool = Pool{};
-        Logger::info("CPU %s pool destroyed", 
+        Logger::info("CPU %s pool destroyed",
             _ctype == CPUMemoryType::Pinned ? "pinned" : "pageable");
         return true;
     }
 
     bool DeviceArena::resize_gpu_pool(const size_t& new_size, cudaStream_t stream) {
         if (!_gpool.mem) {
-            Logger::warn("resize_gpu_pool: pool not yet created");
+            Logger::warn("GPU pool: resize called but pool not yet created");
             return false;
         }
         cudaMemGetInfo(&_gfree_mem, &_gtot);
         if (new_size > _gfree_mem) {
-            Logger::warn("resize_gpu_pool: %zu MB requested but only %zu MB free", new_size / MB, _gfree_mem / MB);
+            Logger::warn("Resizing GPU pool: %zu MB requested but only %zu MB free", new_size / MB, _gfree_mem / MB);
         }
         { // Limit lock's scope
             std::lock_guard<std::mutex> lock(_mutex);
@@ -166,13 +169,14 @@ namespace cuarena {
         _gpool.size = _gpool.cap = aligned;
         _glimit = aligned;
         if (_gtype == GPUMemoryType::Managed) {
-            if (stream) Logger::warn("resize_gpu_pool: stream argument ignored for Managed memory");
+            if (stream) Logger::warn("Resizing GPU pool: stream argument ignored for Managed memory");
             if (cudaMallocManaged(reinterpret_cast<void**>(&_gpool.mem), _gpool.size) != cudaSuccess) {
                 _gpool = Pool{};
                 return false;
             }
             CUARENA_CHECK(cudaMemset(_gpool.mem, 0, _gpool.size));
-        } else {
+        }
+        else {
             if (CUARENA_MALLOC(reinterpret_cast<void**>(&_gpool.mem), _gpool.size, stream) != cudaSuccess) {
                 _gpool = Pool{};
                 return false;
@@ -188,12 +192,12 @@ namespace cuarena {
 
     bool DeviceArena::resize_cpu_pool(const size_t& new_size) {
         if (!_cpool.mem) {
-            Logger::warn("resize_cpu_pool: pool not yet created");
+            Logger::warn("Resizing CPU pool: pool not yet created");
             return false;
         }
         sys_mem_info(_cfree_mem, _ctot);
         if (new_size > _cfree_mem) {
-            Logger::warn("resize_cpu_pool: %zu MB requested but only %zu MB free", new_size / MB, _cfree_mem / MB);
+            Logger::warn("Resizing CPU pool: %zu MB requested but only %zu MB free", new_size / MB, _cfree_mem / MB);
         }
         { // Limit lock's scope
             std::lock_guard<std::mutex> lock(_mutex);
@@ -214,7 +218,8 @@ namespace cuarena {
                 return false;
             }
             std::memset(_cpool.mem, 0, _cpool.size);
-        } else {
+        }
+        else {
             if (cudaMallocHost(&_cpool.mem, _cpool.size) != cudaSuccess) {
                 _cpool = Pool{};
                 return false;
@@ -325,7 +330,8 @@ namespace cuarena {
             _gpu_free_by_addr.emplace(rem, rem_size);
             _gpu_free_by_size[rem_size].insert(rem);
             out_size = size;
-        } else {
+        }
+        else {
             out_size = block_size;
         }
         return block;
@@ -348,7 +354,8 @@ namespace cuarena {
             _cpu_free_by_addr.emplace(rem, rem_size);
             _cpu_free_by_size[rem_size].insert(rem);
             out_size = size;
-        } else {
+        }
+        else {
             out_size = block_size;
         }
         return block;
@@ -411,7 +418,7 @@ namespace cuarena {
     void DeviceArena::_cpu_free_block(const addr_t& ptr) {
         auto it = _cpu_alloc_list.find(ptr);
         if (it == _cpu_alloc_list.end()) {
-            Logger::error("deallocate_pinned: pointer %p not in CPU alloc list", ptr);
+            Logger::error("deallocate pinned: pointer %p not in CPU alloc list", ptr);
             throw cpu_memory_error("invalid pointer");
         }
         const size_t size = it->second;

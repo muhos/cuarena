@@ -117,17 +117,20 @@ int main() {
 
 ```cpp
 // Construct and create both pools immediately
-DeviceArena(size_t cpu_limit, size_t gpu_limit, cudaStream_t stream = 0);
+DeviceArena(size_t cpu_limit, size_t gpu_limit,
+            GPUMemoryType gtype = GPUMemoryType::Device,
+            CPUMemoryType ctype = CPUMemoryType::Pinned,
+            cudaStream_t stream = 0);
 
 // Create pools manually (limit = 0 uses all available memory minus a safety penalty)
-bool create_gpu_pool(size_t limit = 0, cudaStream_t stream = 0);
-bool create_cpu_pool(size_t limit = 0);
+bool create_gpu_pool(size_t limit = 0, GPUMemoryType type = GPUMemoryType::Device, cudaStream_t stream = 0);
+bool create_cpu_pool(size_t limit = 0, CPUMemoryType type = CPUMemoryType::Pinned);
 
 // Destroy pools and release memory back to the OS
 bool destroy_gpu_pool();
 bool destroy_cpu_pool();
 
-// Resize pools (invalidates all existing allocations)
+// Resize pools (invalidates all existing allocations, preserves memory type)
 bool resize_gpu_pool(size_t new_size, cudaStream_t stream = 0);
 bool resize_cpu_pool(size_t new_size);
 
@@ -190,44 +193,90 @@ catch (const cuarena::cuda_error& e)       { ... }
 
 Measured on RTX 4090, CUDA 12.6, Ubuntu 24.04, GCC 13.3. 500 iterations, 50 warmup. All times in microseconds.
 
+### Device pool
+
 **Benchmark 1: single large alloc + free (8 MB)**
 
 | allocator | mean | median | min | max |
 |---|---|---|---|---|
-| `cudaMalloc` + `cudaFree` | 174.45 | 174.27 | 172.91 | 184.33 |
-| `cudaMallocAsync` + `cudaFreeAsync` | 1.41 | 0.26 | 0.25 | 574.65 |
-| cuarena alloc + dealloc | **0.07** | **0.07** | **0.07** | **0.13** |
+| `cudaMalloc` + `cudaFree` | 604.22 | 598.37 | 591.52 | 619.84 |
+| `cudaMallocAsync` + `cudaFreeAsync` | 1.36 | 0.26 | 0.26 | 548.61 |
+| cuarena alloc + dealloc | **0.07** | **0.07** | **0.07** | **0.12** |
 
-cuarena is **$2358{\times}$ faster** than `cudaMalloc` and **$19{\times}$ faster** than `cudaMallocAsync`.
+cuarena is **$8305{\times}$ faster** than `cudaMalloc` and **$18.73{\times}$ faster** than `cudaMallocAsync`.
 
 **Benchmark 2: batch alloc 512 $\times$ 1 KB, then free all**
 
 | allocator | mean | median | min | max |
 |---|---|---|---|---|
-| `cudaMalloc` + `cudaFree` | 651.25 | 651.29 | 636.33 | 668.81 |
-| `cudaMallocAsync` + `cudaFreeAsync` | 165.29 | 163.53 | 161.37 | 814.36 |
-| cuarena alloc + dealloc | **61.15** | **61.08** | **60.18** | **65.40** |
+| `cudaMalloc` + `cudaFree` | 839.96 | 839.35 | 831.26 | 867.10 |
+| `cudaMallocAsync` + `cudaFreeAsync` | 164.01 | 162.18 | 159.24 | 815.75 |
+| cuarena alloc + dealloc | **59.35** | **59.19** | **58.77** | **66.14** |
 
-cuarena is **$10.65{\times}$ faster** than `cudaMalloc` and **$2.70{\times}$ faster** than `cudaMallocAsync`.
+cuarena is **$14.15{\times}$ faster** than `cudaMalloc` and **$2.76{\times}$ faster** than `cudaMallocAsync`.
 
 **Benchmark 3: interleaved ping-pong (4 live $\times$ 1 MB, cycling)**
 
 | allocator | mean | median | min | max |
 |---|---|---|---|---|
-| `cudaMalloc` + `cudaFree` | 0.85 | 0.88 | 0.65 | 1.21 |
-| `cudaMallocAsync` + `cudaFreeAsync` | 0.30 | 0.30 | 0.27 | 0.53 |
-| cuarena alloc + dealloc | **0.09** | **0.08** | **0.07** | **2.34** |
+| `cudaMalloc` + `cudaFree` | 0.40 | 0.33 | 0.30 | 4.05 |
+| `cudaMallocAsync` + `cudaFreeAsync` | 0.29 | 0.29 | 0.26 | 1.02 |
+| cuarena alloc + dealloc | **0.09** | **0.08** | **0.07** | **2.00** |
 
-cuarena is **$10{\times}$ faster** than `cudaMalloc` and **$3.51{\times}$ faster** than `cudaMallocAsync`.
+cuarena is **$4.53{\times}$ faster** than `cudaMalloc` and **$3.33{\times}$ faster** than `cudaMallocAsync`.
 
 **Benchmark 4: resize chain (1 MB to 8 MB in 8 doublings)**
 
 | allocator | mean | median | min | max |
 |---|---|---|---|---|
-| `cudaMalloc` + `cudaFree` | 4725.57 | 4723.97 | 4715.17 | 4847.98 |
-| `cudaMallocAsync` + `cudaFreeAsync` | 4.18 | 2.88 | 2.77 | 641.47 |
-| cuarena resize | **0.85** | **0.85** | **0.84** | **0.91** |
+| `cudaMalloc` + `cudaFree` | 7151.65 | 7150.93 | 7145.85 | 7188.53 |
+| `cudaMallocAsync` + `cudaFreeAsync` | 4.14 | 2.86 | 2.79 | 639.25 |
+| cuarena resize | **0.87** | **0.86** | **0.84** | **1.71** |
 
-cuarena is **$5540{\times}$ faster** than `cudaMalloc` and **$4.90{\times}$ faster** than `cudaMallocAsync`.
+cuarena is **$8260{\times}$ faster** than `cudaMalloc` and **$4.78{\times}$ faster** than `cudaMallocAsync`.
 
-Two remarks worth mentioning. First, `cudaMallocAsync` shows extreme max latency spikes (up to 814 $\mu s$) compared to a median of 0.26-163 $\mu s$; these are driver-side overhead that occurs unpredictably. cuarena's max values stay within $2{\times}$ of its median across all benchmarks, reflecting the deterministic nature of pure host-side allocation. Second, the resize benchmark shows the incremental cost clearly: 8 sequential `cudaMalloc` calls accumulate to 4.7 $ms$ per chain, while cuarena's free-list reuse keeps the entire chain under 1 $\mu s$.
+### Managed pool
+
+**Benchmark 1: single large alloc + free (8 MB)**
+
+| allocator | mean | median | min | max |
+|---|---|---|---|---|
+| `cudaMallocManaged` + `cudaFree` | 16.88 | 16.70 | 15.76 | 21.84 |
+| cuarena alloc + dealloc | **0.08** | **0.07** | **0.07** | **0.14** |
+
+cuarena is **$221{\times}$ faster** than `cudaMallocManaged`.
+
+**Benchmark 2: batch alloc 512 $\times$ 1 KB, then free all**
+
+| allocator | mean | median | min | max |
+|---|---|---|---|---|
+| `cudaMallocManaged` + `cudaFree` | 2230.71 | 2229.82 | 2209.29 | 2345.45 |
+| cuarena alloc + dealloc | **59.39** | **58.97** | **58.15** | **65.91** |
+
+cuarena is **$37.56{\times}$ faster** than `cudaMallocManaged`.
+
+**Benchmark 3: interleaved ping-pong (4 live $\times$ 1 MB, cycling)**
+
+| allocator | mean | median | min | max |
+|---|---|---|---|---|
+| `cudaMallocManaged` + `cudaFree` | 4.27 | 4.36 | 3.86 | 7.50 |
+| cuarena alloc + dealloc | **0.08** | **0.08** | **0.07** | **0.12** |
+
+cuarena is **$54.90{\times}$ faster** than `cudaMallocManaged`.
+
+**Benchmark 4: resize chain (1 MB to 8 MB in 8 doublings)**
+
+| allocator | mean | median | min | max |
+|---|---|---|---|---|
+| `cudaMallocManaged` + `cudaFree` | 138.36 | 127.83 | 123.39 | 1132.24 |
+| cuarena resize | **0.86** | **0.85** | **0.84** | **1.23** |
+
+cuarena is **$161.62{\times}$ faster** than `cudaMallocManaged`.
+
+### Remarks
+
+`cudaMallocAsync` shows extreme max latency spikes (up to 815 $\mu s$) against a median of 0.26–162 $\mu s$; this is unpredictable driver-side overhead. cuarena's max values stay within $2{\times}$ of its median across all benchmarks, reflecting the deterministic nature of pure host-side allocation.
+
+`cudaMallocManaged` is substantially more expensive than `cudaMalloc` for batch allocations; the batch benchmark shows 2230 $\mu s$ vs 840 $\mu s$ as the unified memory driver must set up page migration policy per allocation. Nonetheless, cuarena's managed pool amortizes that cost to a single `cudaMallocManaged` call at creation time, after which suballocations incur zero performance cost (0.07–0.09 $\mu s$ per operation).
+
+The resize benchmark captures the compounding cost most clearly: 8 sequential `cudaMalloc` calls accumulate to 7.1 $ms$ per chain, while cuarena's free-list reuse keeps the entire chain under 1 $\mu s$ regardless of pool type.

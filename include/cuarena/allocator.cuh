@@ -4,6 +4,7 @@
 #include <map>
 #include <set>
 #include <mutex>
+#include <cstring>
 #include <cassert>
 #include <stdexcept>
 
@@ -13,8 +14,6 @@
 #include "definitions.cuh"
 
 namespace cuarena {
-
-    using addr_t = void*;
 
     struct Pool {
         addr_t mem  = nullptr;
@@ -42,6 +41,8 @@ namespace cuarena {
         size_t _gtot = 0, _gfree_mem = 0, _glimit = 0;
         size_t _ctot = 0, _cfree_mem = 0, _climit = 0;
         size_t _gpu_allocated = 0, _cpu_allocated = 0;
+        GPUMemoryType _gtype = GPUMemoryType::Device;
+        CPUMemoryType _ctype = CPUMemoryType::Pinned;
 
         mutable std::mutex _mutex;
 
@@ -68,7 +69,11 @@ namespace cuarena {
     public:
 
         DeviceArena           () = default;
-        DeviceArena           (const size_t& cpu_limit, const size_t& gpu_limit, const cudaStream_t& stream = 0);
+        DeviceArena           (const size_t& cpu_limit, 
+                               const size_t& gpu_limit, 
+                               const GPUMemoryType& gtype = GPUMemoryType::Device,
+                               const CPUMemoryType& ctype = CPUMemoryType::Pinned,
+                               const cudaStream_t& stream = 0);
 
         DeviceArena           (const DeviceArena&) = delete;
         DeviceArena& operator=(const DeviceArena&) = delete;
@@ -77,14 +82,20 @@ namespace cuarena {
 
         ~DeviceArena();
 
-        bool create_gpu_pool    (const size_t& limit = 0, cudaStream_t stream = 0);
-        bool create_cpu_pool    (const size_t& limit = 0);
+        bool create_gpu_pool    (const size_t& limit = 0, 
+                                 const GPUMemoryType& gtype = GPUMemoryType::Device, 
+                                 const cudaStream_t& stream = 0);
+        bool create_cpu_pool    (const size_t& limit = 0, 
+                                 const CPUMemoryType& ctype = CPUMemoryType::Pinned);
         bool destroy_gpu_pool   ();
         bool destroy_cpu_pool   ();
         bool resize_gpu_pool    (const size_t& new_size, cudaStream_t stream = 0);
         bool resize_cpu_pool    (const size_t& new_size);
         void reset_gpu_pool     ();
         void reset_cpu_pool     ();
+
+        GPUMemoryType gpu_memory_type() const noexcept { return _gtype; }
+        CPUMemoryType cpu_memory_type() const noexcept { return _ctype; }
 
         template<class T>
         T* allocate(const size_t& count) {

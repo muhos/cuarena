@@ -2,10 +2,14 @@
 
 namespace cuarena {
 
-    DeviceArena::DeviceArena(const size_t& cpu_limit, const size_t& gpu_limit, const cudaStream_t& stream) {
-        if (!create_cpu_pool(cpu_limit))
+    DeviceArena::DeviceArena(const size_t& cpu_limit, 
+                             const size_t& gpu_limit, 
+                             const GPUMemoryType& gtype,
+                             const CPUMemoryType& ctype,
+                             const cudaStream_t& stream) {
+        if (!create_cpu_pool(cpu_limit, ctype))
             throw cpu_memory_error("failed to create CPU pinned pool");
-        if (!create_gpu_pool(gpu_limit, stream))
+        if (!create_gpu_pool(gpu_limit, gtype, stream))
             throw gpu_memory_error("failed to create GPU pool");
     }
 
@@ -14,7 +18,7 @@ namespace cuarena {
         destroy_cpu_pool();
     }
 
-    bool DeviceArena::create_gpu_pool(const size_t& limit, cudaStream_t stream) {
+    bool DeviceArena::create_gpu_pool(const size_t& limit, const GPUMemoryType& type, const cudaStream_t& stream) {
         if (_gpool.mem) {
             Logger::info("GPU pool already exists (%zu MB)", _gpool.size / MB);
             return true;
@@ -34,16 +38,29 @@ namespace cuarena {
         }
         _gpool.cap = _gpool.size;
         _gpool.off = 0;
-        if (CUARENA_MALLOC(reinterpret_cast<void**>(&_gpool.mem), _gpool.size, stream) != cudaSuccess) {
-            _gpool = Pool{};
-            return false;
+        _gtype = type;
+        if (type == GPUMemoryType::Managed) {
+            if (stream) Logger::warn("create_gpu_pool: stream argument ignored for Managed memory");
+            if (cudaMallocManaged(reinterpret_cast<void**>(&_gpool.mem), _gpool.size) != cudaSuccess) {
+                _gpool = Pool{};
+                return false;
+            }
+            CUARENA_CHECK(cudaMemset(_gpool.mem, 0, _gpool.size));
+        } else {
+            if (CUARENA_MALLOC(reinterpret_cast<void**>(&_gpool.mem), _gpool.size, stream) != cudaSuccess) {
+                _gpool = Pool{};
+                return false;
+            }
+            CUARENA_CHECK(cudaMemsetAsync(_gpool.mem, 0, _gpool.size, stream));
         }
         CUARENA_CHECK(cudaMemsetAsync(_gpool.mem, 0, _gpool.size, stream));
-        Logger::info("GPU pool created: %zu MB", _gpool.size / MB);
+        Logger::info("GPU %s pool created: %zu MB", 
+            _gtype == GPUMemoryType::Device ? "device" : "managed",
+            _gpool.size / MB);
         return true;
     }
 
-    bool DeviceArena::create_cpu_pool(const size_t& limit) {
+    bool DeviceArena::create_cpu_pool(const size_t& limit, const CPUMemoryType& type) {
         if (_cpool.mem) {
             Logger::info("CPU pool already exists (%zu MB)", _cpool.size / MB);
             return true;
@@ -64,11 +81,23 @@ namespace cuarena {
         }
         _cpool.cap = _cpool.size;
         _cpool.off = 0;
-        if (cudaMallocHost(&_cpool.mem, _cpool.size) != cudaSuccess) {
-            _cpool = Pool{};
-            return false;
+        _ctype = type;
+        if (type == CPUMemoryType::Pageable) {
+            _cpool.mem = std::malloc(_cpool.size);
+            if (!_cpool.mem) {
+                _cpool = Pool{};
+                return false;
+            }
+            std::memset(_cpool.mem, 0, _cpool.size);
+        } else {
+            if (cudaMallocHost(&_cpool.mem, _cpool.size) != cudaSuccess) {
+                _cpool = Pool{};
+                return false;
+            }
         }
-        Logger::info("CPU pinned pool created: %zu MB", _cpool.size / MB);
+        Logger::info("CPU %s pool created: %zu MB", 
+            _ctype == CPUMemoryType::Pinned ? "pinned" : "pageable",
+            _cpool.size / MB);
         return true;
     }
 
@@ -83,7 +112,8 @@ namespace cuarena {
         }
         if (cudaFree(_gpool.mem) != cudaSuccess) return false;
         _gpool = Pool{};
-        Logger::info("GPU pool destroyed");
+        Logger::info("GPU %s pool destroyed", 
+            _gtype == GPUMemoryType::Device ? "device" : "managed");
         return true;
     }
 
@@ -98,7 +128,8 @@ namespace cuarena {
         }
         if (cudaFreeHost(_cpool.mem) != cudaSuccess) return false;
         _cpool = Pool{};
-        Logger::info("CPU pool destroyed");
+        Logger::info("CPU %s pool destroyed", 
+            _ctype == CPUMemoryType::Pinned ? "pinned" : "pageable");
         return true;
     }
 
@@ -123,12 +154,24 @@ namespace cuarena {
         const size_t aligned = align_up(new_size);
         _gpool.size = _gpool.cap = aligned;
         _glimit = aligned;
-        if (CUARENA_MALLOC(reinterpret_cast<void**>(&_gpool.mem), _gpool.size, stream) != cudaSuccess) {
-            _gpool = Pool{};
-            return false;
+        if (_gtype == GPUMemoryType::Managed) {
+            if (stream) Logger::warn("resize_gpu_pool: stream argument ignored for Managed memory");
+            if (cudaMallocManaged(reinterpret_cast<void**>(&_gpool.mem), _gpool.size) != cudaSuccess) {
+                _gpool = Pool{};
+                return false;
+            }
+            CUARENA_CHECK(cudaMemset(_gpool.mem, 0, _gpool.size));
+        } else {
+            if (CUARENA_MALLOC(reinterpret_cast<void**>(&_gpool.mem), _gpool.size, stream) != cudaSuccess) {
+                _gpool = Pool{};
+                return false;
+            }
+            CUARENA_CHECK(cudaMemsetAsync(_gpool.mem, 0, _gpool.size, stream));
         }
         CUARENA_CHECK(cudaMemsetAsync(_gpool.mem, 0, _gpool.size, stream));
-        Logger::info("GPU pool resized to %zu MB", _gpool.size / MB);
+        Logger::info("GPU %s pool resized to %zu MB", 
+            _gtype == GPUMemoryType::Device ? "device" : "managed",
+            _gpool.size / MB);
         return true;
     }
 
@@ -153,11 +196,22 @@ namespace cuarena {
         const size_t aligned = align_up(new_size);
         _cpool.size = _cpool.cap = aligned;
         _climit = aligned;
-        if (cudaMallocHost(&_cpool.mem, _cpool.size) != cudaSuccess) {
-            _cpool = Pool{};
-            return false;
+        if (_ctype == CPUMemoryType::Pageable) {
+            _cpool.mem = std::malloc(_cpool.size);
+            if (!_cpool.mem) {
+                _cpool = Pool{};
+                return false;
+            }
+            std::memset(_cpool.mem, 0, _cpool.size);
+        } else {
+            if (cudaMallocHost(&_cpool.mem, _cpool.size) != cudaSuccess) {
+                _cpool = Pool{};
+                return false;
+            }
         }
-        Logger::info("CPU pool resized to %zu MB", _cpool.size / MB);
+        Logger::info("CPU %s pool resized to %zu MB", 
+            _ctype == CPUMemoryType::Pinned ? "pinned" : "pageable",
+            _cpool.size / MB);
         return true;
     }
 

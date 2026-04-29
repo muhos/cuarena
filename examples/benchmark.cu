@@ -5,6 +5,7 @@
 #include <iostream>
 #include <algorithm>
 #include <numeric>
+#include <functional>
 
 #define SEP_SIZE 84
 
@@ -31,6 +32,7 @@ inline double elapsed(const Clock::time_point& start) {
 }
 
 inline Stats compute_stats(std::vector<double> times) {
+    if (times.empty()) return Stats{0, 0, 0, 0};
     Stats s;
     std::sort(times.begin(), times.end());
     s.min    = times.front();
@@ -67,26 +69,66 @@ inline void print_speedup(const char* fast, double fast_mean,
         fast_mean < slow_mean ? "faster" : "slower");
 }
 
-inline void print_footer(const Stats& cuda_sync, const Stats& cuda_async, const Stats& arena) {
+inline void print_footer(const Stats& cuda_sync, const Stats& cuda_async, const Stats& arena, const bool& is_device = true) {
     print_separator();
-    print_speedup("cuarena", arena.mean, "cudaMalloc (sync)",  cuda_sync.mean);
-    print_speedup("cuarena", arena.mean, "cudaMallocAsync",    cuda_async.mean);
+    print_speedup("cuarena", arena.mean, is_device ? "cudaMalloc (sync)" : "cudaMallocManaged",  cuda_sync.mean);
+    if (is_device) print_speedup("cuarena", arena.mean, "cudaMallocAsync",    cuda_async.mean);
     print_separator('=');
     std::cout << '\n';
 }
 
+inline void print_stats(const std::vector<double>& t_sync, 
+                        const std::vector<double>& t_async, 
+                        const std::vector<double>& t_arena, 
+                        const char* memType, const char* areType, 
+                        const bool& is_device) {
+    auto s_sync  = compute_stats(t_sync);
+    auto s_async = compute_stats(t_async);
+    auto s_arena = compute_stats(t_arena);
+    print_row(memType, s_sync);
+    if (is_device) print_row("cudaMallocAsync + cudaFreeAsync", s_async);
+    print_row(areType, s_arena);
+    print_footer(s_sync, s_async, s_arena, is_device);
+}
+
+void run_benchmark(cuarena::DeviceArena& alloc, const cudaStream_t& stream = 0);
+
 int main() {
     cuarena::Logger::set_level(1);
 
-    cudaStream_t stream;
-    CUARENA_CHECK(cudaStreamCreate(&stream));
+    // cuarena benchmark (device pool)
+    {
+        cudaStream_t stream;
+        CUARENA_CHECK(cudaStreamCreate(&stream));
+        cuarena::DeviceArena alloc;
+        alloc.create_gpu_pool(4 * cuarena::GB, cuarena::GPUMemoryType::Device, stream);
+        CUARENA_CHECK(cudaDeviceSynchronize());
+        std::cout << std::format("\n  cuarena benchmark (device)  —  {} iterations, {} warmup\n", Config::ITERS, Config::WARMUP);
+        run_benchmark(alloc, stream);
+        CUARENA_CHECK(cudaStreamDestroy(stream));
+    }
+    std::cout << std::endl;
+    // cuarena benchmark (managed pool)
+    {
+        cuarena::DeviceArena alloc;
+        alloc.create_gpu_pool(4 * cuarena::GB, cuarena::GPUMemoryType::Managed);
+        CUARENA_CHECK(cudaDeviceSynchronize());
+        std::cout << std::format("\n  cuarena benchmark (managed)  —  {} iterations, {} warmup\n", Config::ITERS, Config::WARMUP);
+        run_benchmark(alloc);
+    }
+    
+    return 0;
+}
 
-    cuarena::DeviceArena alloc;
-    alloc.create_gpu_pool(4 * cuarena::GB, stream);
-    CUARENA_CHECK(cudaDeviceSynchronize());
-
-    std::cout << std::format("\n  cuarena benchmark  —  {} iterations, {} warmup\n", Config::ITERS, Config::WARMUP);
-
+void run_benchmark(cuarena::DeviceArena& alloc, const cudaStream_t& stream) {
+    const bool is_device = alloc.gpu_memory_type() == cuarena::GPUMemoryType::Device;
+    using AllocFunc = std::function<cudaError_t(void**, size_t)>;
+    AllocFunc allocfunc = is_device ? AllocFunc([ &stream ](void** p, size_t s) { return CUARENA_MALLOC(p, s, stream); })
+                                    : AllocFunc([ ]        (void** p, size_t s) { return cudaMallocManaged(p, s); });
+    std::string memType = is_device ? "cudaMalloc      " : "cudaMallocManaged  ";
+    memType += "+ cudaFree";
+    std::string areType = is_device ? "cuarena alloc   " : "cuarena alloc      ";
+    areType += "+ dealloc";
     // --------------------------------------
     // Benchmark 1: single large alloc + free
     // --------------------------------------
@@ -95,33 +137,36 @@ int main() {
         float* p = nullptr;
         // warmup with sync single
         for (size_t i = 0; i < Config::WARMUP; i++) { 
-            CUARENA_CHECK(cudaMalloc(&p, Config::SIZE_LARGE * sizeof(float))); 
+            CUARENA_CHECK(allocfunc(reinterpret_cast<void**>(&p), Config::SIZE_LARGE * sizeof(float))); 
             CUARENA_CHECK(cudaFree(p)); 
         }
         // timed runs with sync single
         std::vector<double> t_sync(Config::ITERS);
         for (size_t i = 0; i < Config::ITERS; i++) {
             auto start = Clock::now();
-            CUARENA_CHECK(cudaMalloc(&p, Config::SIZE_LARGE * sizeof(float)));
+            CUARENA_CHECK(allocfunc(reinterpret_cast<void**>(&p), Config::SIZE_LARGE * sizeof(float)));
             CUARENA_CHECK(cudaFree(p));
             t_sync[i] = elapsed(start);
         }
 
-        // warmup with async single
-        for (size_t i = 0; i < Config::WARMUP; i++) { 
-            CUARENA_CHECK(cudaMallocAsync(&p, Config::SIZE_LARGE * sizeof(float), stream)); 
-            CUARENA_CHECK(cudaFreeAsync(p, stream)); 
+        std::vector<double> t_async;
+        if (is_device) {
+            // warmup with async single
+            for (size_t i = 0; i < Config::WARMUP; i++) { 
+                CUARENA_CHECK(cudaMallocAsync(&p, Config::SIZE_LARGE * sizeof(float), stream)); 
+                CUARENA_CHECK(cudaFreeAsync(p, stream)); 
+            }
+            CUARENA_CHECK(cudaStreamSynchronize(stream));
+            // timed runs with async single
+            t_async.resize(Config::ITERS);
+            for (size_t i = 0; i < Config::ITERS; i++) {
+                auto start = Clock::now();
+                CUARENA_CHECK(cudaMallocAsync(&p, Config::SIZE_LARGE * sizeof(float), stream));
+                CUARENA_CHECK(cudaFreeAsync(p, stream));
+                t_async[i] = elapsed(start);
+            }
+            CUARENA_CHECK(cudaStreamSynchronize(stream));
         }
-        CUARENA_CHECK(cudaStreamSynchronize(stream));
-        // timed runs with async single
-        std::vector<double> t_async(Config::ITERS);
-        for (size_t i = 0; i < Config::ITERS; i++) {
-            auto start = Clock::now();
-            CUARENA_CHECK(cudaMallocAsync(&p, Config::SIZE_LARGE * sizeof(float), stream));
-            CUARENA_CHECK(cudaFreeAsync(p, stream));
-            t_async[i] = elapsed(start);
-        }
-        CUARENA_CHECK(cudaStreamSynchronize(stream));
 
         // warmup with arena single
         for (size_t i = 0; i < Config::WARMUP; i++) { 
@@ -137,13 +182,7 @@ int main() {
             t_arena[i] = elapsed(start);
         }
 
-        auto s_sync  = compute_stats(t_sync);
-        auto s_async = compute_stats(t_async);
-        auto s_arena = compute_stats(t_arena);
-        print_row("cudaMalloc      + cudaFree",          s_sync);
-        print_row("cudaMallocAsync + cudaFreeAsync", s_async);
-        print_row("cuarena alloc   + dealloc",         s_arena);
-        print_footer(s_sync, s_async, s_arena);
+        print_stats(t_sync, t_async, t_arena, memType.c_str(), areType.c_str(), is_device);
     }
     alloc.reset_gpu_pool();
 
@@ -157,7 +196,7 @@ int main() {
         // warmpup with sync batch
         for (size_t i = 0; i < Config::WARMUP; i++) {
             for (size_t j = 0; j < Config::BATCH_SIZE; j++) 
-                CUARENA_CHECK(cudaMalloc(&ptrs[j], Config::SIZE_SMALL * sizeof(float)));
+                CUARENA_CHECK(allocfunc(reinterpret_cast<void**>(&ptrs[j]), Config::SIZE_SMALL * sizeof(float)));
             for (size_t j = 0; j < Config::BATCH_SIZE; j++) 
                 CUARENA_CHECK(cudaFree(ptrs[j]));
         }
@@ -167,32 +206,35 @@ int main() {
         for (size_t i = 0; i < Config::ITERS; i++) {
             auto start = Clock::now();
             for (size_t j = 0; j < Config::BATCH_SIZE; j++) 
-                CUARENA_CHECK(cudaMalloc(&ptrs[j], Config::SIZE_SMALL * sizeof(float)));
+                CUARENA_CHECK(allocfunc(reinterpret_cast<void**>(&ptrs[j]), Config::SIZE_SMALL * sizeof(float)));
             for (size_t j = 0; j < Config::BATCH_SIZE; j++) 
                 CUARENA_CHECK(cudaFree(ptrs[j]));
             t_sync[i] = elapsed(start);
         }
 
-        // warmup with async batch
-        for (size_t i = 0; i < Config::WARMUP; i++) {
-            for (size_t j = 0; j < Config::BATCH_SIZE; j++) 
-                CUARENA_CHECK(cudaMallocAsync(&ptrs[j], Config::SIZE_SMALL * sizeof(float), stream));
-            for (size_t j = 0; j < Config::BATCH_SIZE; j++) 
-                CUARENA_CHECK(cudaFreeAsync(ptrs[j], stream));
-        }
-        CUARENA_CHECK(cudaStreamSynchronize(stream));
+        std::vector<double> t_async;
+        if (is_device) {
+            // warmup with async batch
+            for (size_t i = 0; i < Config::WARMUP; i++) {
+                for (size_t j = 0; j < Config::BATCH_SIZE; j++) 
+                    CUARENA_CHECK(cudaMallocAsync(&ptrs[j], Config::SIZE_SMALL * sizeof(float), stream));
+                for (size_t j = 0; j < Config::BATCH_SIZE; j++) 
+                    CUARENA_CHECK(cudaFreeAsync(ptrs[j], stream));
+            }
+            CUARENA_CHECK(cudaStreamSynchronize(stream));
 
-        // timed runs with async batch
-        std::vector<double> t_async(Config::ITERS);
-        for (size_t i = 0; i < Config::ITERS; i++) {
-            auto start = Clock::now();
-            for (size_t j = 0; j < Config::BATCH_SIZE; j++) 
-                CUARENA_CHECK(cudaMallocAsync(&ptrs[j], Config::SIZE_SMALL * sizeof(float), stream));
-            for (size_t j = 0; j < Config::BATCH_SIZE; j++) 
-                CUARENA_CHECK(cudaFreeAsync(ptrs[j], stream));
-            t_async[i] = elapsed(start);
+            // timed runs with async batch
+            t_async.resize(Config::ITERS);
+            for (size_t i = 0; i < Config::ITERS; i++) {
+                auto start = Clock::now();
+                for (size_t j = 0; j < Config::BATCH_SIZE; j++) 
+                    CUARENA_CHECK(cudaMallocAsync(&ptrs[j], Config::SIZE_SMALL * sizeof(float), stream));
+                for (size_t j = 0; j < Config::BATCH_SIZE; j++) 
+                    CUARENA_CHECK(cudaFreeAsync(ptrs[j], stream));
+                t_async[i] = elapsed(start);
+            }
+            CUARENA_CHECK(cudaStreamSynchronize(stream));
         }
-        CUARENA_CHECK(cudaStreamSynchronize(stream));
 
         // warmup with arena batch
         for (size_t i = 0; i < Config::WARMUP; i++) {
@@ -213,13 +255,7 @@ int main() {
             t_arena[i] = elapsed(start);
         }
 
-        auto s_sync  = compute_stats(t_sync);
-        auto s_async = compute_stats(t_async);
-        auto s_arena = compute_stats(t_arena);
-        print_row("cudaMalloc      + cudaFree",      s_sync);
-        print_row("cudaMallocAsync + cudaFreeAsync", s_async);
-        print_row("cuarena alloc   + dealloc",       s_arena);
-        print_footer(s_sync, s_async, s_arena);
+        print_stats(t_sync, t_async, t_arena, memType.c_str(), areType.c_str(), is_device);
     }
     alloc.reset_gpu_pool();
 
@@ -234,11 +270,11 @@ int main() {
 
         // warmup with sync ping-pong
         for (size_t j = 0; j < LIVE; j++) 
-            CUARENA_CHECK(cudaMalloc(&live_cuda[j], Config::SIZE_MEDIUM * sizeof(float)));
+            CUARENA_CHECK(allocfunc(reinterpret_cast<void**>(&live_cuda[j]), Config::SIZE_MEDIUM * sizeof(float)));
         for (size_t i = 0; i < Config::WARMUP; i++) {
             size_t slot = i % LIVE;
             CUARENA_CHECK(cudaFree(live_cuda[slot]));
-            CUARENA_CHECK(cudaMalloc(&live_cuda[slot], Config::SIZE_MEDIUM * sizeof(float)));
+            CUARENA_CHECK(allocfunc(reinterpret_cast<void**>(&live_cuda[slot]), Config::SIZE_MEDIUM * sizeof(float)));
         }
         // timed runs with sync ping-pong
         std::vector<double> t_sync(Config::ITERS);
@@ -246,33 +282,36 @@ int main() {
             size_t slot = i % LIVE;
             auto start = Clock::now();
             CUARENA_CHECK(cudaFree(live_cuda[slot]));
-            CUARENA_CHECK(cudaMalloc(&live_cuda[slot], Config::SIZE_MEDIUM * sizeof(float)));
+            CUARENA_CHECK(allocfunc(reinterpret_cast<void**>(&live_cuda[slot]), Config::SIZE_MEDIUM * sizeof(float)));
             t_sync[i] = elapsed(start);
         }
         for (size_t j = 0; j < LIVE; j++) cudaFree(live_cuda[j]);
 
-        // warmup with async ping-pong
-        for (size_t j = 0; j < LIVE; j++) 
-            CUARENA_CHECK(cudaMallocAsync(&live_cuda[j], Config::SIZE_MEDIUM * sizeof(float), stream));
-        for (size_t i = 0; i < Config::WARMUP; i++) {
-            size_t slot = i % LIVE;
-            CUARENA_CHECK(cudaFreeAsync(live_cuda[slot], stream));
-            CUARENA_CHECK(cudaMallocAsync(&live_cuda[slot], Config::SIZE_MEDIUM * sizeof(float), stream));
+        std::vector<double> t_async;
+        if (is_device) {
+            // warmup with async ping-pong
+            for (size_t j = 0; j < LIVE; j++) 
+                CUARENA_CHECK(cudaMallocAsync(&live_cuda[j], Config::SIZE_MEDIUM * sizeof(float), stream));
+            for (size_t i = 0; i < Config::WARMUP; i++) {
+                size_t slot = i % LIVE;
+                CUARENA_CHECK(cudaFreeAsync(live_cuda[slot], stream));
+                CUARENA_CHECK(cudaMallocAsync(&live_cuda[slot], Config::SIZE_MEDIUM * sizeof(float), stream));
+            }
+            CUARENA_CHECK(cudaStreamSynchronize(stream));
+            // timed runs with async ping-pong
+            t_async.resize(Config::ITERS);
+            for (size_t i = 0; i < Config::ITERS; i++) {
+                size_t slot = i % LIVE;
+                auto start = Clock::now();
+                CUARENA_CHECK(cudaFreeAsync(live_cuda[slot], stream));
+                CUARENA_CHECK(cudaMallocAsync(&live_cuda[slot], Config::SIZE_MEDIUM * sizeof(float), stream));
+                t_async[i] = elapsed(start);
+            }
+            CUARENA_CHECK(cudaStreamSynchronize(stream));
+            for (size_t j = 0; j < LIVE; j++) 
+                CUARENA_CHECK(cudaFreeAsync(live_cuda[j], stream));
+            CUARENA_CHECK(cudaStreamSynchronize(stream));
         }
-        CUARENA_CHECK(cudaStreamSynchronize(stream));
-        // timed runs with async ping-pong
-        std::vector<double> t_async(Config::ITERS);
-        for (size_t i = 0; i < Config::ITERS; i++) {
-            size_t slot = i % LIVE;
-            auto start = Clock::now();
-            CUARENA_CHECK(cudaFreeAsync(live_cuda[slot], stream));
-            CUARENA_CHECK(cudaMallocAsync(&live_cuda[slot], Config::SIZE_MEDIUM * sizeof(float), stream));
-            t_async[i] = elapsed(start);
-        }
-        CUARENA_CHECK(cudaStreamSynchronize(stream));
-        for (size_t j = 0; j < LIVE; j++) 
-            CUARENA_CHECK(cudaFreeAsync(live_cuda[j], stream));
-        CUARENA_CHECK(cudaStreamSynchronize(stream));
 
         // warmup with arena ping-pong
         for (size_t j = 0; j < LIVE; j++) 
@@ -293,13 +332,7 @@ int main() {
         }
         for (size_t j = 0; j < LIVE; j++) alloc.deallocate(live_arena[j]);
 
-        auto s_sync  = compute_stats(t_sync);
-        auto s_async = compute_stats(t_async);
-        auto s_arena = compute_stats(t_arena);
-        print_row("cudaMalloc      + cudaFree",      s_sync);
-        print_row("cudaMallocAsync + cudaFreeAsync", s_async);
-        print_row("cuarena alloc   + dealloc",       s_arena);
-        print_footer(s_sync, s_async, s_arena);
+        print_stats(t_sync, t_async, t_arena, memType.c_str(), areType.c_str(), is_device);
     }
     alloc.reset_gpu_pool();
 
@@ -309,78 +342,77 @@ int main() {
     print_header("Benchmark 4: resize chain  (1 MB to 8 MB in 8 doublings)");
     {
         constexpr size_t STEPS = 8;
-
         // warmup with sync resize chain
         for (size_t i = 0; i < Config::WARMUP; i++) {
-            float* p = nullptr; size_t sz = Config::SIZE_MEDIUM;
+            float* p = nullptr; 
+            size_t sz = Config::SIZE_MEDIUM;
             for (size_t s = 0; s < STEPS; s++) { 
                 CUARENA_CHECK(cudaFree(p)); 
-                CUARENA_CHECK(cudaMalloc(&p, sz * sizeof(float))); sz *= 2; 
+                CUARENA_CHECK(allocfunc(reinterpret_cast<void**>(&p), sz * sizeof(float))); sz *= 2; 
             }
             CUARENA_CHECK(cudaFree(p));
         }
         // timed runs with sync resize chain
         std::vector<double> t_sync(Config::ITERS);
         for (size_t i = 0; i < Config::ITERS; i++) {
-            float* p = nullptr; size_t sz = Config::SIZE_MEDIUM;
+            float* p = nullptr; 
+            size_t sz = Config::SIZE_MEDIUM;
             auto start = Clock::now();
             for (size_t s = 0; s < STEPS; s++) { 
                 CUARENA_CHECK(cudaFree(p)); 
-                CUARENA_CHECK(cudaMalloc(&p, sz * sizeof(float))); sz *= 2;
+                CUARENA_CHECK(allocfunc(reinterpret_cast<void**>(&p), sz * sizeof(float))); sz *= 2;
             }
             CUARENA_CHECK(cudaFree(p));
             t_sync[i] = elapsed(start);
         }
 
-        // warmup with async resize chain
-        for (size_t i = 0; i < Config::WARMUP; i++) {
-            float* p = nullptr; size_t sz = Config::SIZE_MEDIUM;
-            for (size_t s = 0; s < STEPS; s++) { 
-                CUARENA_CHECK(cudaFreeAsync(p, stream)); 
-                CUARENA_CHECK(cudaMallocAsync(&p, sz * sizeof(float), stream)); sz *= 2; 
+        std::vector<double> t_async;
+        if (is_device) {
+            // warmup with async resize chain
+            for (size_t i = 0; i < Config::WARMUP; i++) {
+                float* p = nullptr; 
+                size_t sz = Config::SIZE_MEDIUM;
+                for (size_t s = 0; s < STEPS; s++) { 
+                    CUARENA_CHECK(cudaFreeAsync(p, stream)); 
+                    CUARENA_CHECK(cudaMallocAsync(&p, sz * sizeof(float), stream)); sz *= 2; 
+                }
+                CUARENA_CHECK(cudaFreeAsync(p, stream));
             }
-            CUARENA_CHECK(cudaFreeAsync(p, stream));
-        }
-        CUARENA_CHECK(cudaStreamSynchronize(stream));
-        // timed runs with async resize chain
-        std::vector<double> t_async(Config::ITERS);
-        for (size_t i = 0; i < Config::ITERS; i++) {
-            float* p = nullptr; size_t sz = Config::SIZE_MEDIUM;
-            auto start = Clock::now();
-            for (size_t s = 0; s < STEPS; s++) { 
-                CUARENA_CHECK(cudaFreeAsync(p, stream)); 
-                CUARENA_CHECK(cudaMallocAsync(&p, sz * sizeof(float), stream)); sz *= 2; 
+            CUARENA_CHECK(cudaStreamSynchronize(stream));
+            // timed runs with async resize chain
+            t_async.resize(Config::ITERS);
+            for (size_t i = 0; i < Config::ITERS; i++) {
+                float* p = nullptr; 
+                size_t sz = Config::SIZE_MEDIUM;
+                auto start = Clock::now();
+                for (size_t s = 0; s < STEPS; s++) { 
+                    CUARENA_CHECK(cudaFreeAsync(p, stream)); 
+                    CUARENA_CHECK(cudaMallocAsync(&p, sz * sizeof(float), stream)); sz *= 2; 
+                }
+                CUARENA_CHECK(cudaFreeAsync(p, stream));
+                t_async[i] = elapsed(start);
             }
-            CUARENA_CHECK(cudaFreeAsync(p, stream));
-            t_async[i] = elapsed(start);
+            CUARENA_CHECK(cudaStreamSynchronize(stream));
         }
-        CUARENA_CHECK(cudaStreamSynchronize(stream));
 
         // warmup with arena resize chain
         for (size_t i = 0; i < Config::WARMUP; i++) {
-            float* p = nullptr; size_t sz = Config::SIZE_MEDIUM;
+            float* p = nullptr; 
+            size_t sz = Config::SIZE_MEDIUM;
             for (size_t s = 0; s < STEPS; s++) { alloc.resize<float>(p, sz); sz *= 2; }
             alloc.deallocate(p);
         }
         // timed runs with arena resize chain
         std::vector<double> t_arena(Config::ITERS);
         for (size_t i = 0; i < Config::ITERS; i++) {
-            float* p = nullptr; size_t sz = Config::SIZE_MEDIUM;
+            float* p = nullptr; 
+            size_t sz = Config::SIZE_MEDIUM;
             auto start = Clock::now();
             for (size_t s = 0; s < STEPS; s++) { alloc.resize<float>(p, sz); sz *= 2; }
             alloc.deallocate(p);
             t_arena[i] = elapsed(start);
         }
 
-        auto s_sync  = compute_stats(t_sync);
-        auto s_async = compute_stats(t_async);
-        auto s_arena = compute_stats(t_arena);
-        print_row("cudaMalloc      + cudaFree",      s_sync);
-        print_row("cudaMallocAsync + cudaFreeAsync", s_async);
-        print_row("cuarena resize",                  s_arena);
-        print_footer(s_sync, s_async, s_arena);
+        print_stats(t_sync, t_async, t_arena, memType.c_str(), areType.c_str(), is_device);
     }
-
-    CUARENA_CHECK(cudaStreamDestroy(stream));
-    return 0;
 }

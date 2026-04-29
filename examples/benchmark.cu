@@ -9,6 +9,12 @@
 
 #define SEP_SIZE 84
 
+#define CSECTION  "\x1B[1;34m"
+#define CBENCH    "\x1B[1;36m"
+#define CFASTER   "\x1B[1;32m" 
+#define CSLOWER   "\x1B[1;31m"
+#define CNORMAL   "\x1B[0m"
+
 using Clock = std::chrono::high_resolution_clock;
 
 struct Stats {
@@ -49,7 +55,7 @@ inline void print_separator(const char& sep = '-') {
 }
 
 inline void print_header(const char* title) {
-    std::cout << std::format("\n  {}\n", title);
+    std::cout << std::format("\n  " CBENCH "{}" CNORMAL "\n", title);
     print_separator('=');
     std::cout << std::format("  {:<34}  {:>10}  {:>11}  {:>10}  {:>10}\n",
         "allocator", "mean (us)", "median (us)", "min (us)", "max (us)");
@@ -63,10 +69,10 @@ inline void print_row(const char* label, const Stats& s) {
 
 inline void print_speedup(const char* fast, double fast_mean,
                            const char* slow, double slow_mean) {
-    std::cout << std::format("  cuarena vs {:<22}  {:.2f}x {}\n",
-        slow,
-        fast_mean < slow_mean ? slow_mean / fast_mean : fast_mean / slow_mean,
-        fast_mean < slow_mean ? "faster" : "slower");
+    const bool faster = fast_mean < slow_mean;
+    const double ratio = faster ? slow_mean / fast_mean : fast_mean / slow_mean;
+    std::cout << std::format("  cuarena vs {:<22}  {}{:.2f}x {}" CNORMAL "\n",
+        slow, faster ? CFASTER : CSLOWER, ratio, faster ? "faster" : "slower");
 }
 
 inline void print_footer(const Stats& cuda_sync, const Stats& cuda_async, const Stats& arena, const bool& is_device = true) {
@@ -102,8 +108,8 @@ int main() {
         CUARENA_CHECK(cudaStreamCreate(&stream));
         cuarena::DeviceArena alloc;
         alloc.create_gpu_pool(4 * cuarena::GB, cuarena::GPUMemoryType::Device, stream);
-        CUARENA_CHECK(cudaDeviceSynchronize());
-        std::cout << std::format("\n  cuarena benchmark (device)  —  {} iterations, {} warmup\n", Config::ITERS, Config::WARMUP);
+        CUARENA_CHECK(cudaStreamSynchronize(stream));
+        std::cout << std::format("\n  " CSECTION "cuarena benchmark (device)  —  {} iterations, {} warmup" CNORMAL "\n", Config::ITERS, Config::WARMUP);
         run_benchmark(alloc, stream);
         alloc.destroy_gpu_pool();
         CUARENA_CHECK(cudaStreamDestroy(stream));
@@ -114,7 +120,7 @@ int main() {
         cuarena::DeviceArena alloc;
         alloc.create_gpu_pool(4 * cuarena::GB, cuarena::GPUMemoryType::Managed);
         CUARENA_CHECK(cudaDeviceSynchronize());
-        std::cout << std::format("\n  cuarena benchmark (managed)  —  {} iterations, {} warmup\n", Config::ITERS, Config::WARMUP);
+        std::cout << std::format("\n  " CSECTION "cuarena benchmark (managed)  —  {} iterations, {} warmup" CNORMAL "\n", Config::ITERS, Config::WARMUP);
         run_benchmark(alloc);
     }
     

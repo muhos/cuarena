@@ -37,8 +37,7 @@ namespace cuarena {
         }
         else {
             if (!_gfree_mem) {
-                Logger::error("GPU pool: no free GPU memory available");
-                return false;
+                throw gpu_memory_error("GPU pool: no free GPU memory available");
             }
             _gpool.size = _gfree_mem;
         }
@@ -374,7 +373,6 @@ namespace cuarena {
             return ptr;
         }
         if (aligned_bytes > _gpool.cap) {
-            Logger::error("GPU pool exhausted: %zu bytes requested / %zu bytes available", aligned_bytes, _gpool.cap);
             throw gpu_memory_error("GPU pool out of memory");
         }
         ptr = static_cast<byte_t*>(_gpool.mem) + _gpool.off;
@@ -395,7 +393,6 @@ namespace cuarena {
             return ptr;
         }
         if (aligned_bytes > _cpool.cap) {
-            Logger::error("CPU pool exhausted: %zu bytes requested / %zu bytes available", aligned_bytes, _cpool.cap);
             throw cpu_memory_error("CPU pool out of memory");
         }
         ptr = static_cast<byte_t*>(_cpool.mem) + _cpool.off;
@@ -409,8 +406,8 @@ namespace cuarena {
     void DeviceArena::_gpu_free_block(const addr_t& ptr) {
         auto it = _gpu_alloc_list.find(ptr);
         if (it == _gpu_alloc_list.end()) {
-            Logger::error("deallocate: pointer %p not in GPU alloc list", ptr);
-            throw gpu_memory_error("invalid pointer");
+            Logger::debug("deallocate: pointer %p not in GPU alloc list", ptr);
+            throw gpu_memory_error("invalid pointer in freeing GPU block");
         }
         const size_t size = it->second;
         _gpu_alloc_list.erase(it);
@@ -421,8 +418,8 @@ namespace cuarena {
     void DeviceArena::_cpu_free_block(const addr_t& ptr) {
         auto it = _cpu_alloc_list.find(ptr);
         if (it == _cpu_alloc_list.end()) {
-            Logger::error("deallocate pinned: pointer %p not in CPU alloc list", ptr);
-            throw cpu_memory_error("invalid pointer");
+            Logger::debug("deallocate pinned: pointer %p not in CPU alloc list", ptr);
+            throw cpu_memory_error("invalid pointer in freeing CPU block");
         }
         const size_t size = it->second;
         _cpu_alloc_list.erase(it);

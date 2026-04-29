@@ -9,6 +9,7 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
 option(CUARENA_SYNC_ALLOC "Use cudaMalloc instead of cudaMallocAsync" OFF)
 option(CUARENA_BUILD_EXAMPLES "Build examples" ON)
+option(CUARENA_BUILD_TESTS    "Build tests"    ON)
 
 add_library(cuarena STATIC
     src/allocator.cu
@@ -48,6 +49,17 @@ if(CUARENA_BUILD_EXAMPLES)
         CUDA_SEPARABLE_COMPILATION ON
     )
     target_compile_options(cuarena_benchmark PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    )
+endif()
+
+if(CUARENA_BUILD_TESTS)
+    add_executable(cuarena_test tests/test.cu)
+    target_link_libraries(cuarena_test PRIVATE cuarena)
+    set_target_properties(cuarena_test PROPERTIES
+        CUDA_SEPARABLE_COMPILATION ON
+    )
+    target_compile_options(cuarena_test PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
     )
 endif()

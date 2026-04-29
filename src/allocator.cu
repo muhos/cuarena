@@ -53,7 +53,6 @@ namespace cuarena {
             }
             CUARENA_CHECK(cudaMemsetAsync(_gpool.mem, 0, _gpool.size, stream));
         }
-        CUARENA_CHECK(cudaMemsetAsync(_gpool.mem, 0, _gpool.size, stream));
         Logger::info("GPU %s pool created: %zu MB", 
             _gtype == GPUMemoryType::Device ? "device" : "managed",
             _gpool.size / MB);
@@ -126,7 +125,11 @@ namespace cuarena {
             _cpu_alloc_list.clear();
             _cpu_allocated = 0;
         }
-        if (cudaFreeHost(_cpool.mem) != cudaSuccess) return false;
+        if (_ctype == CPUMemoryType::Pageable) {
+            std::free(_cpool.mem);
+        } else {
+            if (cudaFreeHost(_cpool.mem) != cudaSuccess) return false;
+        }
         _cpool = Pool{};
         Logger::info("CPU %s pool destroyed", 
             _ctype == CPUMemoryType::Pinned ? "pinned" : "pageable");

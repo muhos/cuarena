@@ -1,7 +1,7 @@
 #pragma once
 
-#define CNORMAL   "\033[0m"
-#define CERROR    "\033[1;31m"
-#define CWARNING  "\033[1;33m"
-#define CINFO     "\033[1;35m"
-#define CDEBUG    "\033[0;37m"
+#define CNORMAL   "\x1B[0m"
+#define CERROR    "\x1B[1;31m"
+#define CWARNING  "\x1B[1;33m"
+#define CINFO     "\x1B[1;35m"
+#define CDEBUG    "\x1B[0;37m"

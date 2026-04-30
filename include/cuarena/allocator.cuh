@@ -97,6 +97,8 @@ namespace cuarena {
 
         GPUMemoryType gpu_memory_type() const noexcept { return _gtype; }
         CPUMemoryType cpu_memory_type() const noexcept { return _ctype; }
+        constexpr 
+        size_t        alignment      () const noexcept { return ALIGNMENT; }
 
         template<class T>
         T* allocate(const size_t& count) {

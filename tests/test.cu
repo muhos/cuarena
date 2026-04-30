@@ -9,7 +9,6 @@
 #define CTEST "\x1B[1;34m"
 #define CPASS "\x1B[1;32m"
 #define CFAIL "\x1B[1;31m"
-#define CNORMAL "\x1B[0m"
 
 struct TestFailure : std::runtime_error {
     explicit TestFailure(const char* expr, int line)
@@ -23,7 +22,7 @@ struct TestFailure : std::runtime_error {
 inline int total = 0, passed = 0;
 
 inline void section(const char* title) {
-    std::printf("\n%s%s%s\n", CHEADER, title, CNORMAL);
+    std::printf("\n%s%s%s\n", CHEADER, title, CUAR_CNORMAL);
     std::printf("%s\n", std::string(60, '-').c_str());
 }
 
@@ -41,14 +40,14 @@ void run_test(const char* name, Func func) {
     try {
         func();
         std::printf("  %s%s%s %sPASS%s\n", 
-            CTEST, name, CNORMAL, CPASS, CNORMAL);
+            CTEST, name, CUAR_CNORMAL, CPASS, CUAR_CNORMAL);
         ++passed;
     } 
     catch (const TestFailure& e) {
-        std::fprintf(stderr, "  %sFAIL  %s  (%s)%s\n", CFAIL, name, e.what(), CNORMAL);
+        std::fprintf(stderr, "  %sFAIL  %s  (%s)%s\n", CFAIL, name, e.what(), CUAR_CNORMAL);
     } 
     catch (const std::exception& e) {
-        std::fprintf(stderr, "  %sFAIL  %s  (unexpected exception: %s)%s\n", CFAIL, name, e.what(), CNORMAL);
+        std::fprintf(stderr, "  %sFAIL  %s  (unexpected exception: %s)%s\n", CFAIL, name, e.what(), CUAR_CNORMAL);
     }
     gpu_cleanup();
 }
@@ -444,7 +443,7 @@ int main() {
     CUARENA_CHECK(cudaStreamDestroy(stream));
 
     std::printf("\n%s\n", std::string(60, '=').c_str());
-    std::printf("  %s%d%s / %d tests passed%s\n", passed == total ? CPASS : CFAIL, passed, CHEADER, total, CNORMAL);
+    std::printf("  %s%d%s / %d tests passed%s\n", passed == total ? CPASS : CFAIL, passed, CHEADER, total, CUAR_CNORMAL);
     std::printf("%s\n\n", std::string(60, '=').c_str());
 
     return (passed == total) ? 0 : 1;

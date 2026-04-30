@@ -27,12 +27,12 @@ namespace cuarena {
         static void error(const char* fmt, Args&&... args) {
             std::lock_guard<std::mutex> lock(get()._mutex);
             std::fflush(stdout);
-            std::fprintf(stderr, "%sERROR: ", CERROR);
+            std::fprintf(stderr, "%sERROR: ", CUAR_CERROR);
             if constexpr (sizeof...(Args) > 0)
                 std::fprintf(stderr, fmt, std::forward<Args>(args)...);
             else
                 std::fputs(fmt, stderr);
-            std::fprintf(stderr, "%s\n", CNORMAL);
+            std::fprintf(stderr, "%s\n", CUAR_CNORMAL);
             std::fflush(stderr);
         }
 
@@ -40,12 +40,12 @@ namespace cuarena {
         static void warn(const char* fmt, Args&&... args) {
             std::lock_guard<std::mutex> lock(get()._mutex);
             std::fflush(stdout);
-            std::fprintf(stderr, "%sWARNING: ", CWARNING);
+            std::fprintf(stderr, "%sWARNING: ", CUAR_CWARNING);
             if constexpr (sizeof...(Args) > 0)
                 std::fprintf(stderr, fmt, std::forward<Args>(args)...);
             else
                 std::fputs(fmt, stderr);
-            std::fprintf(stderr, "%s\n", CNORMAL);
+            std::fprintf(stderr, "%s\n", CUAR_CNORMAL);
             std::fflush(stderr);
         }
 
@@ -53,12 +53,12 @@ namespace cuarena {
         static void info(const char* fmt, Args&&... args) {
             if (get()._level >= 1) {
                 std::lock_guard<std::mutex> lock(get()._mutex);
-                std::fprintf(stdout, "%s", CINFO);
+                std::fprintf(stdout, "%s", CUAR_CINFO);
                 if constexpr (sizeof...(Args) > 0)
                     std::fprintf(stdout, fmt, std::forward<Args>(args)...);
                 else
                     std::fputs(fmt, stdout);
-                std::fprintf(stdout, "%s\n", CNORMAL);
+                std::fprintf(stdout, "%s\n", CUAR_CNORMAL);
                 std::fflush(stdout);
             }
         }
@@ -67,12 +67,12 @@ namespace cuarena {
         static void debug(const char* fmt, Args&&... args) {
             if (get()._level >= 2) {
                 std::lock_guard<std::mutex> lock(get()._mutex);
-                std::fprintf(stdout, "%sDEBUG: ", CDEBUG);
+                std::fprintf(stdout, "%sDEBUG: ", CUAR_CDEBUG);
                 if constexpr (sizeof...(Args) > 0)
                     std::fprintf(stdout, fmt, std::forward<Args>(args)...);
                 else
                     std::fputs(fmt, stdout);
-                std::fprintf(stdout, "%s\n", CNORMAL);
+                std::fprintf(stdout, "%s\n", CUAR_CNORMAL);
                 std::fflush(stdout);
             }
         }

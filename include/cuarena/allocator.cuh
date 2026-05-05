@@ -277,6 +277,16 @@ namespace cuArena {
             return _gpool.cap + freed;
         }
 
+        // Same as gpu_available() when unfragmented, 
+        // but much smaller when fragmented.
+        size_t gpu_largest_free_block() const noexcept {
+            std::lock_guard<std::mutex> lock(_mutex);
+            size_t largest = _gpool.cap;
+            for (const auto& [ptr, sz] : _gpu_free_by_addr)
+                largest = std::max(largest, sz);
+            return largest;
+        }
+
         size_t cpu_capacity () const noexcept { return _cpool.size; }
 
         size_t cpu_used     () const noexcept {

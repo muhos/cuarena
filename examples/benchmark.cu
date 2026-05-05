@@ -50,19 +50,19 @@ inline Stats compute_stats(std::vector<double> times) {
 }
 
 inline void print_separator(const char& sep = '-') {
-    std::cout << std::format("  {}\n", std::string(SEP_SIZE, sep));
+    std::cout << std::format("{}\n", std::string(SEP_SIZE, sep));
 }
 
 inline void print_header(const char* title) {
-    std::cout << std::format("\n  " CBENCH "{}" CUAR_CNORMAL "\n", title);
+    std::cout << std::format(CBENCH "{}" CUAR_CNORMAL "\n", title);
     print_separator('=');
-    std::cout << std::format("  {:<34}  {:>10}  {:>11}  {:>10}  {:>10}\n",
+    std::cout << std::format("{:<34}  {:>10}  {:>11}  {:>10}  {:>10}\n",
         "allocator", "mean (us)", "median (us)", "min (us)", "max (us)");
     print_separator();
 }
 
 inline void print_row(const char* label, const Stats& s) {
-    std::cout << std::format("  {:<34}  {:10.2f}  {:11.2f}  {:10.2f}  {:10.2f}\n",
+    std::cout << std::format("{:<34}  {:10.2f}  {:11.2f}  {:10.2f}  {:10.2f}\n",
         label, s.mean, s.median, s.min, s.max);
 }
 
@@ -70,7 +70,7 @@ inline void print_speedup(const char* fast, double fast_mean,
                            const char* slow, double slow_mean) {
     const bool faster = fast_mean < slow_mean;
     const double ratio = faster ? slow_mean / fast_mean : fast_mean / slow_mean;
-    std::cout << std::format("  cuArena vs {:<22}  {}{:.2f}x {}" CUAR_CNORMAL "\n",
+    std::cout << std::format("cuArena vs {:<22}  {}{:.2f}x {}" CUAR_CNORMAL "\n",
         slow, faster ? CFASTER : CSLOWER, ratio, faster ? "faster" : "slower");
 }
 
@@ -99,7 +99,7 @@ inline void print_stats(const std::vector<double>& t_sync,
 void run_benchmark(cuArena::DeviceArena& alloc, const cudaStream_t& stream = 0);
 
 int main() {
-    cuArena::Logger::set_level(1);
+    cuArena::Logger::set_level(0);
 
     // cuArena benchmark (device pool)
     {
@@ -108,7 +108,7 @@ int main() {
         cuArena::DeviceArena alloc;
         alloc.create_gpu_pool(4 * cuArena::GB, cuArena::GPUMemoryType::Device, stream);
         CUARENA_CHECK(cudaStreamSynchronize(stream));
-        std::cout << std::format("\n  " CSECTION "cuArena benchmark (device)  —  {} iterations, {} warmup" CUAR_CNORMAL "\n", Config::ITERS, Config::WARMUP);
+        std::cout << std::format(CSECTION "cuArena benchmark (device)  —  {} iterations, {} warmup:" CUAR_CNORMAL "\n\n", Config::ITERS, Config::WARMUP);
         run_benchmark(alloc, stream);
         alloc.destroy_gpu_pool();
         CUARENA_CHECK(cudaStreamDestroy(stream));
@@ -119,7 +119,7 @@ int main() {
         cuArena::DeviceArena alloc;
         alloc.create_gpu_pool(4 * cuArena::GB, cuArena::GPUMemoryType::Managed);
         CUARENA_CHECK(cudaDeviceSynchronize());
-        std::cout << std::format("\n  " CSECTION "cuArena benchmark (managed)  —  {} iterations, {} warmup" CUAR_CNORMAL "\n", Config::ITERS, Config::WARMUP);
+        std::cout << std::format(CSECTION "cuArena benchmark (managed)  —  {} iterations, {} warmup:" CUAR_CNORMAL "\n\n", Config::ITERS, Config::WARMUP);
         run_benchmark(alloc);
     }
     
@@ -420,5 +420,122 @@ void run_benchmark(cuArena::DeviceArena& alloc, const cudaStream_t& stream) {
         }
 
         print_stats(t_sync, t_async, t_arena, memType.c_str(), areType.c_str(), is_device);
+    }
+    alloc.reset_gpu_pool();
+
+    // -----------------------------------------------------------------------
+    // Benchmark 5: fragmentation + compact cycle
+    //   8 x 32 MB allocs, free alternating => 4 x 32 MB holes
+    //   Measure: compact latency, then 64 MB alloc that only fits after compact
+    // -----------------------------------------------------------------------
+    if (is_device) {
+        print_header("Benchmark 5: fragmentation + compact cycle  (8 x 32 MB, free alternating)");
+        {
+            constexpr size_t NBLOCKS  = 8;
+            constexpr size_t BLK_ELEM = 32 * cuArena::MB / sizeof(float);
+
+            std::vector<double> t_compact(Config::ITERS);
+            std::vector<double> t_alloc_after(Config::ITERS);
+
+            for (size_t i = 0; i < Config::ITERS + Config::WARMUP; i++) {
+                // Build fragmented region
+                float* ptrs[NBLOCKS];
+                for (size_t b = 0; b < NBLOCKS; b++)
+                    ptrs[b] = alloc.allocate<float>(BLK_ELEM);
+                for (size_t b = 0; b < NBLOCKS; b += 2)
+                    alloc.deallocate(ptrs[b]);
+
+                // Time compact
+                auto start0 = Clock::now();
+                alloc.compact_gpu_dynamic([](cuArena::addr_t, cuArena::addr_t, size_t) {}, stream);
+                CUARENA_CHECK(cudaStreamSynchronize(stream));
+                double ct = elapsed(start0);
+
+                // Time the large alloc that only succeeds after compact
+                auto start1 = Clock::now();
+                float* big = alloc.allocate<float>(64 * cuArena::MB / sizeof(float));
+                double at = elapsed(start1);
+
+                if (i >= Config::WARMUP) {
+                    t_compact[i - Config::WARMUP]     = ct;
+                    t_alloc_after[i - Config::WARMUP] = at;
+                }
+
+                alloc.reset_gpu_pool();
+            }
+
+            auto sc = compute_stats(t_compact);
+            auto sa = compute_stats(t_alloc_after);
+            print_row("compaction (256 MB active)", sc);
+            print_row("alloc 64 MB after compact ",          sa);
+            print_separator();
+            std::cout << std::format("  {}{:<56}  {:.2f} us{}\n",
+                CBENCH, "compact + alloc total (mean)", sc.mean + sa.mean, CUAR_CNORMAL);
+            print_separator('=');
+            std::cout << '\n';
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Benchmark 6: stable vs dynamic allocation latency
+    // -----------------------------------------------------------------------
+    if (is_device) {
+        print_header("Benchmark 6: stable vs dynamic alloc latency  (varied sizes)");
+        {
+            // Re-create pool with a stable region
+            alloc.destroy_gpu_pool();
+            alloc.create_gpu_pool(4 * cuArena::GB, cuArena::GPUMemoryType::Device, stream,
+                                  512 * cuArena::MB);
+            CUARENA_CHECK(cudaStreamSynchronize(stream));
+
+            const size_t sizes[] = { Config::SIZE_SMALL, Config::SIZE_MEDIUM, Config::SIZE_LARGE };
+            const char*  labels[] = { "256 B", "256 KB", "2 MB" };
+
+            for (size_t si = 0; si < 3; si++) {
+                const size_t ELEM = sizes[si] / sizeof(float);
+                std::vector<double> t_stable(Config::ITERS);
+                std::vector<double> t_dynamic(Config::ITERS);
+
+                // Warmup stable
+                for (size_t i = 0; i < Config::WARMUP; i++) {
+                    auto p = alloc.allocate<float>(ELEM, cuArena::Region::Stable);
+                    alloc.deallocate(p);
+                }
+                // Timed stable
+                for (size_t i = 0; i < Config::ITERS; i++) {
+                    auto start = Clock::now();
+                    auto p = alloc.allocate<float>(ELEM, cuArena::Region::Stable);
+                    alloc.deallocate(p);
+                    t_stable[i] = elapsed(start);
+                }
+
+                // Warmup dynamic
+                for (size_t i = 0; i < Config::WARMUP; i++) {
+                    auto p = alloc.allocate<float>(ELEM, cuArena::Region::Dynamic);
+                    alloc.deallocate(p);
+                }
+                // Timed dynamic
+                for (size_t i = 0; i < Config::ITERS; i++) {
+                    auto start = Clock::now();
+                    auto p = alloc.allocate<float>(ELEM, cuArena::Region::Dynamic);
+                    alloc.deallocate(p);
+                    t_dynamic[i] = elapsed(start);
+                }
+
+                auto ss = compute_stats(t_stable);
+                auto sd = compute_stats(t_dynamic);
+                std::string ls = std::string("stable  ") + labels[si];
+                std::string ld = std::string("dynamic ") + labels[si];
+                print_row(ls.c_str(),  ss);
+                print_row(ld.c_str(),  sd);
+                print_separator();
+                const bool dyn_faster = sd.mean < ss.mean;
+                const double ratio = dyn_faster ? ss.mean / sd.mean : sd.mean / ss.mean;
+                std::cout << std::format("dynamic vs stable [{:<6}]         {}  {:.2f}x {}" CUAR_CNORMAL "\n",
+                    labels[si], dyn_faster ? CFASTER : CSLOWER, ratio, dyn_faster ? "faster" : "slower");
+                print_separator('=');
+                std::cout << '\n';
+            }
+        }
     }
 }

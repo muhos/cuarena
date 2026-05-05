@@ -1,6 +1,6 @@
 #include <cuarena/sysinfo.hpp>
 
-namespace cuarena {
+namespace cuArena {
 
     size_t sys_mem_used() {
         size_t used = 0;

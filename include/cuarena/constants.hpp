@@ -2,7 +2,7 @@
 
 #include <cstddef>
 
-namespace cuarena {
+namespace cuArena {
 
 constexpr size_t KB = 0x00000400ULL;
 constexpr size_t MB = 0x00100000ULL;

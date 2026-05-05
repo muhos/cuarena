@@ -27,8 +27,8 @@ struct Config {
     static constexpr size_t ITERS  = 500;
     static constexpr size_t WARMUP = 50;
     static constexpr size_t SIZE_SMALL  = 256;
-    static constexpr size_t SIZE_MEDIUM = 256 * cuarena::KB;
-    static constexpr size_t SIZE_LARGE  = 2   * cuarena::MB;
+    static constexpr size_t SIZE_MEDIUM = 256 * cuArena::KB;
+    static constexpr size_t SIZE_LARGE  = 2   * cuArena::MB;
     static constexpr size_t BATCH_SIZE = 512;
 };
 
@@ -70,14 +70,14 @@ inline void print_speedup(const char* fast, double fast_mean,
                            const char* slow, double slow_mean) {
     const bool faster = fast_mean < slow_mean;
     const double ratio = faster ? slow_mean / fast_mean : fast_mean / slow_mean;
-    std::cout << std::format("  cuarena vs {:<22}  {}{:.2f}x {}" CUAR_CNORMAL "\n",
+    std::cout << std::format("  cuArena vs {:<22}  {}{:.2f}x {}" CUAR_CNORMAL "\n",
         slow, faster ? CFASTER : CSLOWER, ratio, faster ? "faster" : "slower");
 }
 
 inline void print_footer(const Stats& cuda_sync, const Stats& cuda_async, const Stats& arena, const bool& is_device = true) {
     print_separator();
-    print_speedup("cuarena", arena.mean, is_device ? "cudaMalloc (sync)" : "cudaMallocManaged",  cuda_sync.mean);
-    if (is_device) print_speedup("cuarena", arena.mean, "cudaMallocAsync",    cuda_async.mean);
+    print_speedup("cuArena", arena.mean, is_device ? "cudaMalloc (sync)" : "cudaMallocManaged",  cuda_sync.mean);
+    if (is_device) print_speedup("cuArena", arena.mean, "cudaMallocAsync",    cuda_async.mean);
     print_separator('=');
     std::cout << '\n';
 }
@@ -96,44 +96,44 @@ inline void print_stats(const std::vector<double>& t_sync,
     print_footer(s_sync, s_async, s_arena, is_device);
 }
 
-void run_benchmark(cuarena::DeviceArena& alloc, const cudaStream_t& stream = 0);
+void run_benchmark(cuArena::DeviceArena& alloc, const cudaStream_t& stream = 0);
 
 int main() {
-    cuarena::Logger::set_level(1);
+    cuArena::Logger::set_level(1);
 
-    // cuarena benchmark (device pool)
+    // cuArena benchmark (device pool)
     {
         cudaStream_t stream;
         CUARENA_CHECK(cudaStreamCreate(&stream));
-        cuarena::DeviceArena alloc;
-        alloc.create_gpu_pool(4 * cuarena::GB, cuarena::GPUMemoryType::Device, stream);
+        cuArena::DeviceArena alloc;
+        alloc.create_gpu_pool(4 * cuArena::GB, cuArena::GPUMemoryType::Device, stream);
         CUARENA_CHECK(cudaStreamSynchronize(stream));
-        std::cout << std::format("\n  " CSECTION "cuarena benchmark (device)  —  {} iterations, {} warmup" CUAR_CNORMAL "\n", Config::ITERS, Config::WARMUP);
+        std::cout << std::format("\n  " CSECTION "cuArena benchmark (device)  —  {} iterations, {} warmup" CUAR_CNORMAL "\n", Config::ITERS, Config::WARMUP);
         run_benchmark(alloc, stream);
         alloc.destroy_gpu_pool();
         CUARENA_CHECK(cudaStreamDestroy(stream));
     }
     std::cout << std::endl;
-    // cuarena benchmark (managed pool)
+    // cuArena benchmark (managed pool)
     {
-        cuarena::DeviceArena alloc;
-        alloc.create_gpu_pool(4 * cuarena::GB, cuarena::GPUMemoryType::Managed);
+        cuArena::DeviceArena alloc;
+        alloc.create_gpu_pool(4 * cuArena::GB, cuArena::GPUMemoryType::Managed);
         CUARENA_CHECK(cudaDeviceSynchronize());
-        std::cout << std::format("\n  " CSECTION "cuarena benchmark (managed)  —  {} iterations, {} warmup" CUAR_CNORMAL "\n", Config::ITERS, Config::WARMUP);
+        std::cout << std::format("\n  " CSECTION "cuArena benchmark (managed)  —  {} iterations, {} warmup" CUAR_CNORMAL "\n", Config::ITERS, Config::WARMUP);
         run_benchmark(alloc);
     }
     
     return 0;
 }
 
-void run_benchmark(cuarena::DeviceArena& alloc, const cudaStream_t& stream) {
-    const bool is_device = alloc.gpu_memory_type() == cuarena::GPUMemoryType::Device;
+void run_benchmark(cuArena::DeviceArena& alloc, const cudaStream_t& stream) {
+    const bool is_device = alloc.gpu_memory_type() == cuArena::GPUMemoryType::Device;
     using AllocFunc = std::function<cudaError_t(void**, size_t)>;
     AllocFunc allocfunc = is_device ? AllocFunc([ &stream ](void** p, size_t s) { return CUARENA_MALLOC(p, s, stream); })
                                     : AllocFunc([ ]        (void** p, size_t s) { return cudaMallocManaged(p, s); });
     std::string memType = is_device ? "cudaMalloc      " : "cudaMallocManaged  ";
     memType += "+ cudaFree";
-    std::string areType = is_device ? "cuarena alloc   " : "cuarena alloc      ";
+    std::string areType = is_device ? "cuArena alloc   " : "cuArena alloc      ";
     areType += "+ dealloc";
     // --------------------------------------
     // Benchmark 1: single large alloc + free

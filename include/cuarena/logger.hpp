@@ -4,7 +4,7 @@
 #include <cstdio>
 #include "color.hpp"
 
-namespace cuarena {
+namespace cuArena {
 
     class Logger {
 

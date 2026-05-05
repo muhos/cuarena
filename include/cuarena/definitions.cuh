@@ -7,7 +7,7 @@
 #include "types.hpp"
 #include "logger.hpp"
 
-namespace cuarena {
+namespace cuArena {
 
 struct cuda_error : std::runtime_error {
     explicit cuda_error(const char* msg) : std::runtime_error(msg) {}
@@ -27,9 +27,9 @@ struct cuda_error : std::runtime_error {
     do {                                                                            \
         const cudaError_t _e = (call);                                              \
         if (_e != cudaSuccess) {                                                    \
-            cuarena::Logger::error("CUDA error [%s:%d]: %s",                        \
+            cuArena::Logger::error("CUDA error [%s:%d]: %s",                        \
                 __FILE__, __LINE__, cudaGetErrorString(_e));                        \
-            throw cuarena::cuda_error(cudaGetErrorString(_e));                      \
+            throw cuArena::cuda_error(cudaGetErrorString(_e));                      \
         }                                                                           \
     } while (0)
 
@@ -37,9 +37,9 @@ struct cuda_error : std::runtime_error {
     do {                                                                            \
         const cudaError_t _e = cudaGetLastError();                                  \
         if (_e != cudaSuccess) {                                                    \
-            cuarena::Logger::error("%s [%s:%d]: %s",                                \
+            cuArena::Logger::error("%s [%s:%d]: %s",                                \
                 msg, __FILE__, __LINE__, cudaGetErrorString(_e));                   \
-            throw cuarena::cuda_error(cudaGetErrorString(_e));                      \
+            throw cuArena::cuda_error(cudaGetErrorString(_e));                      \
         }                                                                           \
     } while (0)
 

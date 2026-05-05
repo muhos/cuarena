@@ -1,6 +1,6 @@
 #pragma once
 
-namespace cuarena {
+namespace cuArena {
 
 #define CUAR_CNORMAL   "\x1B[0m"
 #define CUAR_CERROR    "\x1B[1;31m"

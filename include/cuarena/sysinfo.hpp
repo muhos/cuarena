@@ -13,7 +13,7 @@
 #  include <psapi.h>
 #endif
 
-namespace cuarena {
+namespace cuArena {
 
     size_t sys_mem_used();
     void   sys_mem_info(size_t& free_bytes, size_t& total_bytes);

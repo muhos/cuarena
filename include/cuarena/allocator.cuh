@@ -1,19 +1,31 @@
 #pragma once
 
-#include <unordered_map>
 #include <map>
 #include <set>
+#include <array>
+#include <vector>
+#include <functional>
+#include <algorithm>
+#include <unordered_map>
 #include <mutex>
 #include <cstring>
 #include <cassert>
 #include <stdexcept>
-
 #include "logger.hpp"
 #include "sysinfo.hpp"
 #include "constants.hpp"
 #include "definitions.cuh"
 
-namespace cuarena {
+namespace cuArena {
+
+    /**
+     * Called by compact_gpu_dynamic for each relocated dynamic allocation.  
+     * Input: (old_ptr, new_ptr, byte_size).
+     * The callback runs after all cudaMemcpyAsync calls have been queued
+     * on the provided stream; the caller must sync that stream before
+     * accessing GPU data through the new pointers.
+     */
+    using RelocateCallback = std::function<void(addr_t, addr_t, size_t)>;
 
     struct Pool {
         addr_t mem  = nullptr;
@@ -37,6 +49,20 @@ namespace cuarena {
         static constexpr size_t GPU_PENALTY = 256 * MB;
         static constexpr size_t CPU_PENALTY = 512 * MB;
 
+        /**
+         * Segregated size-class bins for the GPU dynamic region.
+         * Bin k holds free blocks whose size falls in [2^(k+7), 2^(k+8)).
+         * Example:
+         *   k=0  : [128 B ,  256 B)
+         *   k=1  : [256 B ,  512 B)
+         *   ...
+         *   k=31 : [256 GB, overflow)
+         * Each bin stores block base addresses ordered ascending.
+         * For bins k+1 and above every block is guaranteed >= size,
+         * so the first entry is taken immediately.
+         */
+        static constexpr int NUM_BINS = 32;
+    
         Pool   _gpool, _cpool;
         size_t _gtot = 0, _gfree_mem = 0, _glimit = 0;
         size_t _ctot = 0, _cfree_mem = 0, _climit = 0;
@@ -47,31 +73,52 @@ namespace cuarena {
 
         mutable std::mutex _mutex;
 
-        std::map<addr_t, size_t>           _gpu_free_by_addr;
-        std::map<size_t, std::set<addr_t>> _gpu_free_by_size;
-        std::unordered_map<addr_t, size_t> _gpu_alloc_list;
+        // Stable region (front of GPU pool). Uses coalescing only.
+        size_t _stable_size      = 0;
+        size_t _stable_bytes     = 0;
+        size_t _stable_off       = 0;
+        size_t _stable_cap       = 0;
+        size_t _gpu_stable_allocated = 0;
+
+        std::map<addr_t, size_t>           _gpu_stable_free_by_addr;
+        std::unordered_map<addr_t, size_t> _gpu_stable_alloc_list;
+
+        // Dynamic sub-region (rest of GPU pool). 
+        // Uses isolated bins + coalescing + compact().
+        std::map<addr_t, size_t>                _gpu_free_by_addr;   // coalescing
+        std::array<std::set<addr_t>, NUM_BINS>  _gpu_bins;           // size index
+        std::unordered_map<addr_t, size_t>      _gpu_alloc_list;     // dynamic allocs
 
         std::map<addr_t, size_t>           _cpu_free_by_addr;
         std::map<size_t, std::set<addr_t>> _cpu_free_by_size;
         std::unordered_map<addr_t, size_t> _cpu_alloc_list;
 
-        size_t align_up         (size_t n) const noexcept { return (n + ALIGNMENT - 1) & ~(ALIGNMENT - 1); }
-        bool   is_aligned       (size_t n) const noexcept { return (n & (ALIGNMENT - 1)) == 0; }
+        size_t align_up   (size_t n) const noexcept { return (n + ALIGNMENT - 1) & ~(ALIGNMENT - 1); }
+        bool   is_aligned (size_t n) const noexcept { return (n & (ALIGNMENT - 1)) == 0; }
 
-        void   _insert_gpu_free (const addr_t& ptr, const size_t& size);
-        void   _insert_cpu_free (const addr_t& ptr, const size_t& size);
-        addr_t _pop_gpu_free    (const size_t& size, size_t& out_size);
-        addr_t _pop_cpu_free    (const size_t& size, size_t& out_size);
-        addr_t _gpu_alloc       (const size_t& aligned_bytes);
-        addr_t _cpu_alloc       (const size_t& aligned_bytes);
-        void   _gpu_free_block  (const addr_t& ptr);
-        void   _cpu_free_block  (const addr_t& ptr);
+        int _bin_index(size_t size) const noexcept {
+            if (size >= (size_t(1) << (NUM_BINS - 1 + 7))) return NUM_BINS - 1;
+            int bit = 63 - __builtin_clzll(size);
+            int idx = bit - 7;
+            return (idx < 0) ? 0 : idx;
+        }
+
+        void   _insert_gpu_free    (const addr_t& ptr, const size_t& size);
+        void   _insert_cpu_free    (const addr_t& ptr, const size_t& size);
+        addr_t _pop_gpu_free       (const size_t& size, size_t& out_size);
+        addr_t _pop_cpu_free       (const size_t& size, size_t& out_size);
+        addr_t _gpu_alloc          (const size_t& aligned_bytes);
+        addr_t _stable_alloc       (const size_t& aligned_bytes);
+        addr_t _cpu_alloc          (const size_t& aligned_bytes);
+        void   _gpu_free_block     (const addr_t& ptr);
+        void   _stable_free_block  (const addr_t& ptr);
+        void   _cpu_free_block     (const addr_t& ptr);
 
     public:
 
         DeviceArena           () = default;
-        DeviceArena           (const size_t& cpu_limit, 
-                               const size_t& gpu_limit, 
+        DeviceArena           (const size_t& cpu_limit,
+                               const size_t& gpu_limit,
                                const GPUMemoryType& gtype = GPUMemoryType::Device,
                                const CPUMemoryType& ctype = CPUMemoryType::Pinned,
                                const cudaStream_t& stream = 0);
@@ -83,10 +130,11 @@ namespace cuarena {
 
         ~DeviceArena();
 
-        bool create_gpu_pool    (const size_t& limit = 0, 
-                                 const GPUMemoryType& gtype = GPUMemoryType::Device, 
-                                 const cudaStream_t& stream = 0);
-        bool create_cpu_pool    (const size_t& limit = 0, 
+        bool create_gpu_pool    (const size_t& limit = 0,
+                                 const GPUMemoryType& gtype = GPUMemoryType::Device,
+                                 const cudaStream_t& stream = 0,
+                                 const size_t& stable_bytes = 0);
+        bool create_cpu_pool    (const size_t& limit = 0,
                                  const CPUMemoryType& ctype = CPUMemoryType::Pinned);
         bool destroy_gpu_pool   ();
         bool destroy_cpu_pool   ();
@@ -97,14 +145,19 @@ namespace cuarena {
 
         GPUMemoryType gpu_memory_type() const noexcept { return _gtype; }
         CPUMemoryType cpu_memory_type() const noexcept { return _ctype; }
-        constexpr 
-        size_t        alignment      () const noexcept { return ALIGNMENT; }
 
         template<class T>
-        T* allocate(const size_t& count) {
+        T* allocate(const size_t& count, Region region = Region::Dynamic) {
             if (!count) return nullptr;
             const size_t aligned = align_up(count * sizeof(T));
             std::lock_guard<std::mutex> lock(_mutex);
+            if (region == Region::Stable) {
+                if (_stable_size == 0) {
+                    Logger::debug("cuArena: pool has no stable region — falling back to dynamic");
+                    return static_cast<T*>(_gpu_alloc(aligned));
+                }
+                return static_cast<T*>(_stable_alloc(aligned));
+            }
             return static_cast<T*>(_gpu_alloc(aligned));
         }
 
@@ -112,7 +165,15 @@ namespace cuarena {
         void deallocate(T* ptr) {
             if (!ptr) return;
             std::lock_guard<std::mutex> lock(_mutex);
-            _gpu_free_block(static_cast<addr_t>(ptr));
+            addr_t p = static_cast<addr_t>(ptr);
+            if (_stable_size > 0) {
+                byte_t* stable_end = static_cast<byte_t*>(_gpool.mem) + _stable_size;
+                if (p >= _gpool.mem && static_cast<byte_t*>(p) < stable_end) {
+                    _stable_free_block(p);
+                    return;
+                }
+            }
+            _gpu_free_block(p);
         }
 
         template<class T>
@@ -125,13 +186,22 @@ namespace cuarena {
             const size_t aligned = align_up(new_count * sizeof(T));
             std::lock_guard<std::mutex> lock(_mutex);
             if (ptr) {
-                auto it = _gpu_alloc_list.find(static_cast<addr_t>(ptr));
+                addr_t p = static_cast<addr_t>(ptr);
+                // Resizing a stable allocation is not permitted
+                if (_stable_size > 0) {
+                    byte_t* stable_end = static_cast<byte_t*>(_gpool.mem) + _stable_size;
+                    if (p >= _gpool.mem && static_cast<byte_t*>(p) < stable_end) {
+                        Logger::debug("cuArena: resize called on a stable-region pointer %p", p);
+                        throw gpu_memory_error("cannot resize a stable region allocation");
+                    }
+                }
+                auto it = _gpu_alloc_list.find(p);
                 if (it == _gpu_alloc_list.end()) {
-                    Logger::error("resize: pointer %p not in GPU alloc list", static_cast<addr_t>(ptr));
+                    Logger::debug("resize: pointer %p not in GPU alloc list", p);
                     throw gpu_memory_error("invalid pointer");
                 }
                 if (it->second >= aligned) return;
-                _gpu_free_block(static_cast<addr_t>(ptr));
+                _gpu_free_block(p);
                 ptr = nullptr;
             }
             ptr = static_cast<T*>(_gpu_alloc(aligned));
@@ -164,7 +234,7 @@ namespace cuarena {
             if (ptr) {
                 auto it = _cpu_alloc_list.find(static_cast<addr_t>(ptr));
                 if (it == _cpu_alloc_list.end()) {
-                    Logger::error("resize_pinned: pointer %p not in CPU alloc list", static_cast<addr_t>(ptr));
+                    Logger::debug("resize pinned: pointer %p not in CPU alloc list", static_cast<addr_t>(ptr));
                     throw cpu_memory_error("invalid pointer");
                 }
                 if (it->second >= aligned) return;
@@ -174,22 +244,50 @@ namespace cuarena {
             ptr = static_cast<T*>(_cpu_alloc(aligned));
         }
 
-        size_t gpu_capacity     () const noexcept { return _gpool.size; }
-        size_t gpu_used         () const noexcept { std::lock_guard<std::mutex> lock(_mutex); return _gpu_allocated; }
-        size_t gpu_available    () const noexcept {
+        /**
+         * GPU compaction and pointer relocation
+         *
+         * defrags dynamic-region allocations towards the front of
+         * the dynamic region, eliminating fragmentation holes.
+         * The caller must synchronize `stream` before accessing GPU data
+         * through the new pointers.
+         */
+        void compact_gpu_dynamic(RelocateCallback callback, cudaStream_t stream = 0);
+
+        addr_t gpu_base             () const noexcept { return _gpool.mem; }
+        size_t gpu_capacity         () const noexcept { return _gpool.size; }
+        size_t gpu_stable_capacity  () const noexcept { return _stable_size; }
+        size_t gpu_dynamic_capacity () const noexcept { return _gpool.size - _stable_size; }
+        size_t gpu_stable_used      () const noexcept {
+            std::lock_guard<std::mutex> lock(_mutex);
+            return _gpu_stable_allocated;
+        }
+
+
+        size_t gpu_used     () const noexcept {
+            std::lock_guard<std::mutex> lock(_mutex);
+            return _gpu_allocated + _gpu_stable_allocated;
+        }
+
+        size_t gpu_available() const noexcept {
             std::lock_guard<std::mutex> lock(_mutex);
             size_t freed = 0;
-            for (auto& [sz, addrs] : _gpu_free_by_size) 
-                freed += sz * addrs.size();
+            for (auto& [ptr, sz] : _gpu_free_by_addr)
+                freed += sz;
             return _gpool.cap + freed;
         }
 
-        size_t cpu_capacity     () const noexcept { return _cpool.size; }
-        size_t cpu_used         () const noexcept { std::lock_guard<std::mutex> lock(_mutex); return _cpu_allocated; }
-        size_t cpu_available    () const noexcept {
+        size_t cpu_capacity () const noexcept { return _cpool.size; }
+
+        size_t cpu_used     () const noexcept {
+            std::lock_guard<std::mutex> lock(_mutex);
+            return _cpu_allocated;
+        }
+
+        size_t cpu_available() const noexcept {
             std::lock_guard<std::mutex> lock(_mutex);
             size_t freed = 0;
-            for (auto& [sz, addrs] : _cpu_free_by_size) 
+            for (auto& [sz, addrs] : _cpu_free_by_size)
                 freed += sz * addrs.size();
             return _cpool.cap + freed;
         }

@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace cuarena {
+namespace cuArena {
 
     using addr_t  = void*;
     using byte_t  = unsigned char;
@@ -13,5 +13,6 @@ namespace cuarena {
 
     enum class GPUMemoryType { Device, Managed };
     enum class CPUMemoryType { Pinned, Pageable };
+    enum class Region        { Stable, Dynamic  };
 
 }

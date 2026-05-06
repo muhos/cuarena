@@ -93,10 +93,7 @@ namespace cuArena {
         std::map<size_t, std::set<addr_t>> _cpu_free_by_size;
         std::unordered_map<addr_t, size_t> _cpu_alloc_list;
 
-        size_t align_up   (size_t n) const noexcept { return (n + ALIGNMENT - 1) & ~(ALIGNMENT - 1); }
-        bool   is_aligned (size_t n) const noexcept { return (n & (ALIGNMENT - 1)) == 0; }
-
-        int _bin_index(size_t size) const noexcept {
+        int _bin_index(const size_t& size) const noexcept {
             if (size >= (size_t(1) << (NUM_BINS - 1 + 7))) return NUM_BINS - 1;
             int bit = 63 - __builtin_clzll(size);
             int idx = bit - 7;
@@ -148,6 +145,8 @@ namespace cuArena {
 
         constexpr
         size_t        alignment      () const noexcept { return ALIGNMENT; }
+        size_t        align_up       (const size_t& n) const noexcept { return (n + ALIGNMENT - 1) & ~(ALIGNMENT - 1); }
+        bool          is_aligned     (const size_t& n) const noexcept { return (n & (ALIGNMENT - 1)) == 0; }
 
         template<class T>
         T* allocate(const size_t& count, Region region = Region::Dynamic) {
